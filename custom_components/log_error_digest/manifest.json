@@ -4,6 +4,7 @@
   "codeowners": [
     "@girtsn"
   ],
+  "config_flow": true,
   "dependencies": [
     "system_log",
     "persistent_notification"
@@ -13,5 +14,6 @@
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/girtsn/ha-log-alert-digest/issues",
   "requirements": [],
-  "version": "0.1.0"
+  "single_config_entry": true,
+  "version": "0.2.0"
 }

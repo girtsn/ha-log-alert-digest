@@ -1,67 +1,61 @@
 # Log Alert Digest
 
-Home Assistant custom integration for grouped ERROR/WARNING system-log alerts, rate limiting, restart persistence and a single updating persistent notification.
+Home Assistant custom integration for grouped ERROR/WARNING log alerts, rate limiting, restart persistence and a single updating persistent notification.
 
 [Releases](https://github.com/girtsn/ha-log-alert-digest/releases) · [Issues](https://github.com/girtsn/ha-log-alert-digest/issues)
 
-## Behaviour (unchanged from original v0.1.0)
+## Behaviour
 
-- **ERROR:** eligible for a digest after two minutes by default.
+- **ERROR:** eligible for a digest after 2 minutes by default.
 - **WARNING:** eligible after 24 hours by default, or bundled with an earlier ERROR digest.
 - **Duplicate entries:** grouped by logger, source, message and final exception line, with counters.
 - **Email:** sends one grouped email at most every 60 minutes, suppressing repeats of already notified error signatures for 24 hours.
 - **Home Assistant:** creates/updates one persistent notification (`log_error_digest_summary`) per digest, rather than per error.
 - **Storage:** restart-persistent bounded history of up to 200 groups, saved locally in Home Assistant's `.storage`, with 30-day pruning.
-- **Resilience:** five-minute retry after failed email delivery, with protection against self-notification loops.
+- **Resilience:** retries after failed email delivery, with protection against self-notification loops.
 
-**Both notification outputs remain enabled.** A working `notify.*` entity is required even if you normally use the Home Assistant notification bell. This release deliberately keeps the original functionality; no configuration flow or optional-email change has been introduced.
+Both email and persistent notifications remain enabled, just as in v0.1.0. **v0.2.0 moves configuration into the Home Assistant UI and enables system-log events automatically**, so no YAML is needed for new installations.
 
 ## Install with HACS / Marketplace
 
-1. Add this repository as a **custom Integration repository**: `https://github.com/girtsn/ha-log-alert-digest`.
-2. Install the **published v0.1.0 GitHub Release** in HACS/Marketplace.
-3. In `/config/configuration.yaml`, enable native log events and configure the integration (merge any existing `system_log:` block):
+1. Add `https://github.com/girtsn/ha-log-alert-digest` as a custom **Integration** repository in HACS / Marketplace.
+2. Install the **published v0.2.0 GitHub Release** (not a commit snapshot) and restart Home Assistant.
+3. Open **Settings → Devices & services → Add integration → Log Alert Digest**.
+4. Review the automatically suggested `notify.*` entity (prefers one containing `email`), subject prefix and notification timings. Save.
 
-~~~yaml
-system_log:
-  fire_event: true
+That's it. No `configuration.yaml` changes, `system_log: fire_event: true`, or manual notification automation are required. The integration switches the already-loaded Home Assistant System Log's event output on at runtime, and restores the previous state when unloaded.
 
-log_error_digest:
-  notify_entity: notify.my_email
-  initial_minutes: 2
-  cooldown_minutes: 60
-  repeat_hours: 24
-  include_warnings: true
-  warning_digest_hours: 24
-  email_subject_prefix: "[HASS]"
-~~~
+**Compatibility note:** This uses Home Assistant's internal `system_log` handler `fire_event` attribute. The integration explicitly detects when the attribute is unavailable instead of silently missing errors. This API is not officially guaranteed stable by Home Assistant, so future Home Assistant upgrades may require an adaptation.
 
-4. Replace `notify.my_email` with your working notification entity.
-5. Validate Home Assistant configuration and **restart Home Assistant**. This integration is configured using YAML, not the Add Integration UI.
+For manual installation, copy `custom_components/log_error_digest/` into `/config/custom_components/log_error_digest/`, restart, then add the integration through the UI.
 
-To install without HACS, copy `custom_components/log_error_digest/` into `/config/custom_components/log_error_digest/` and restart.
+## Configure and test
 
-## Test
+Use **Settings → Devices & services → Log Alert Digest → Configure** to change:
 
-In **Developer Tools → Actions**, use `system_log.write` with level `error` and a unique non-sensitive message. With a working notify provider, a digest should appear in the notification bell and by email after around two minutes. A WARNING-only test may take up to 24 hours before its first digest.
+- Notification entity and email subject prefix (same `notify.send_message` action and UI convention as Device Availability Digest).
+- ERROR delay, global email cooldown, repeat suppression interval.
+- Whether WARNING events are monitored, and WARNING-only digest delay.
 
-Use **Settings → System → Logs** for complete tracebacks and Home Assistant's own repeat counts.
+To test, invoke **Developer Tools → Actions → system_log.write** with level `error` and a distinctive non-sensitive message. A digest should appear in the Home Assistant notification bell and be sent to the configured `notify.*` entity after approximately two minutes.
 
-## Scope and limitations
+Use **Settings → System → Logs** for complete tracebacks and Home Assistant's own repeat counts. Errors occurring before setup or while HA is stopped cannot be reconstructed.
 
-The monitor observes ERROR and WARNING messages emitted through Home Assistant's native `system_log_event` stream **after startup**. It does not detect silent errors, logs emitted while HA is shut down, or add-on/host errors that do not reach Home Assistant's system log. The persistent notification is updated per digest, not per individual occurrence.
+## Upgrading from v0.1.0 (YAML)
 
-Events are batched in memory and saved approximately every 30 seconds and on graceful HA shutdown; a crash can lose unsaved recent events. Email bodies can include exception contents from other integrations; use a private notification target.
+Existing `log_error_digest:` YAML settings are **automatically imported once** into a Home Assistant config entry when you restart after updating. Existing notification choices and intervals are preserved. After confirming the integration appears in **Settings → Devices & services**, remove the obsolete `log_error_digest:` YAML block; it is no longer required.
 
-## Development and HACS releases
+If you previously added `system_log: fire_event: true`, you may remove that setting too (or retain it if other automations need system-log events). If `system_log:` has other settings, keep those.
 
-Run the pure-Python tests:
+Never configure the same monitor both by an old manual automation and the new integration; the new integration provides its own deduplication and cooldown.
+
+## Development and releases
 
 ~~~bash
 python -m compileall -q custom_components tests
 python -m unittest discover -s tests -p 'test_*.py' -v
 ~~~
 
-The release workflow runs when **Validate** succeeds on a push to the current `main` commit. It publishes the version in `custom_components/log_error_digest/manifest.json` as a **GitHub Release tagged `vX.Y.Z`** and uses `RELEASE_NOTES_X.Y.Z.md`.
+Each push to `main` runs automated validation. On success for the current commit, the release workflow publishes a **GitHub Release tagged `vX.Y.Z`**, matching the version in `custom_components/log_error_digest/manifest.json` and `RELEASE_NOTES_X.Y.Z.md`. HACS displays this published version, not a commit ID.
 
-**Important:** HACS uses the latest published GitHub Release tag as the available version. A Git tag alone is insufficient, and without published releases HACS can display a commit hash. For each future update, bump the manifest version, add release notes, validate, and publish the matching GitHub Release.
+For future updates, always increment the version and publish a matching GitHub Release after validation.

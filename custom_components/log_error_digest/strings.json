@@ -1,0 +1,47 @@
+{
+  "title": "Log Alert Digest",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Log Alert Digest",
+        "description": "Automatically suggests a Home Assistant notification entity, preferring an email notifier. Configure the same notify.* target used by your other alert integrations. No configuration.yaml changes are needed.",
+        "data": {
+          "notify_entity": "Notification entity",
+          "email_subject_prefix": "Email subject prefix (e.g. [HASS])",
+          "initial_minutes": "ERROR grouping delay (minutes)",
+          "cooldown_minutes": "Minimum interval between emails (minutes)",
+          "repeat_hours": "Repeated error reminder delay (hours)",
+          "include_warnings": "Include WARNING messages",
+          "warning_digest_hours": "WARNING-only digest delay (hours)"
+        }
+      }
+    },
+    "error": {
+      "invalid_notify": "Enter an entity ID beginning with notify."
+    },
+    "abort": {
+      "single_instance_allowed": "Log Alert Digest is already configured",
+      "invalid_notify": "A valid notify.* entity is required"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Log Alert Digest settings",
+        "description": "Adjust the email notification target, subject prefix and digest timing. Changes automatically reload monitoring.",
+        "data": {
+          "notify_entity": "Notification entity",
+          "email_subject_prefix": "Email subject prefix (e.g. [HASS])",
+          "initial_minutes": "ERROR grouping delay (minutes)",
+          "cooldown_minutes": "Minimum interval between emails (minutes)",
+          "repeat_hours": "Repeated error reminder delay (hours)",
+          "include_warnings": "Include WARNING messages",
+          "warning_digest_hours": "WARNING-only digest delay (hours)"
+        }
+      }
+    },
+    "error": {
+      "invalid_notify": "Enter an entity ID beginning with notify."
+    }
+  }
+}
