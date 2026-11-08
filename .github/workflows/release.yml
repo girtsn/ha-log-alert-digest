@@ -1,0 +1,56 @@
+name: Publish validated Log Alert Digest release
+
+on:
+  workflow_run:
+    workflows: ["Validate"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    if: >-
+      ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out validated commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+
+      - name: Publish matching GitHub Release for HACS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VALIDATED_SHA: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          current_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
+          if [[ "$VALIDATED_SHA" != "$current_sha" ]]; then
+            echo "Skipping stale validation $VALIDATED_SHA; main is now $current_sha."
+            exit 0
+          fi
+          VERSION="$(python3 -c 'import json; print(json.load(open("custom_components/log_error_digest/manifest.json"))["version"])')"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Not a stable semantic version: $VERSION" >&2
+            exit 1
+          fi
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists."
+            exit 0
+          fi
+          if [[ -f "RELEASE_NOTES_$VERSION.md" ]]; then
+            gh release create "v$VERSION" \
+              --target "$VALIDATED_SHA" \
+              --title "Log Alert Digest v$VERSION" \
+              --notes-file "RELEASE_NOTES_$VERSION.md"
+          else
+            gh release create "v$VERSION" \
+              --target "$VALIDATED_SHA" \
+              --title "Log Alert Digest v$VERSION" \
+              --generate-notes
+          fi
