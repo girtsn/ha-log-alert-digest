@@ -1,17 +1,17 @@
 {
   "domain": "log_error_digest",
   "name": "Log Alert Digest",
-  "documentation": "https://github.com/girtsn/ha-log-alert-digest",
-  "integration_type": "service",
-  "iot_class": "local_push",
-  "requirements": [],
+  "codeowners": [
+    "@girtsn"
+  ],
   "dependencies": [
     "system_log",
     "persistent_notification"
   ],
-  "codeowners": [
-    "@girtsn"
-  ],
-  "version": "0.1.0",
-  "issue_tracker": "https://github.com/girtsn/ha-log-alert-digest/issues"
+  "documentation": "https://github.com/girtsn/ha-log-alert-digest",
+  "integration_type": "service",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/girtsn/ha-log-alert-digest/issues",
+  "requirements": [],
+  "version": "0.1.0"
 }
