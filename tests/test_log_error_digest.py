@@ -14,6 +14,10 @@ CUSTOM_INTEGRATION_NOTICE = (
     "This component might cause stability problems, be sure to disable it "
     "if you experience issues with Home Assistant"
 )
+FUJITSU_TIMEOUT = (
+    "Timeout error fetching information from "
+    "https://ads-field-eu.aylanetworks.com/apiv1/dsns/AC000W002919187/properties.json -"
+)
 INITIAL = timedelta(minutes=2)
 COOLDOWN = timedelta(minutes=60)
 REPEAT = timedelta(hours=24)
@@ -96,7 +100,8 @@ class DigestTests(unittest.TestCase):
             }, T0)
             self.assertFalse(accepted)
         self.assertFalse(state.groups)
-        self.assertFalse(state.dirty)
+        self.assertEqual(state.ignored["untested_custom_integration"]["pending"], 3)
+        self.assertTrue(state.dirty)
 
     def test_other_loader_warnings_and_real_errors_are_retained(self):
         state = ErrorDigestState()
@@ -117,20 +122,107 @@ class DigestTests(unittest.TestCase):
         state = ErrorDigestState()
         state.observe({
             "level": "WARNING", "name": "homeassistant.loader",
-            "source": "loader.py:833",
-            "message": [CUSTOM_INTEGRATION_NOTICE.format("resmed_myair")],
-        }, T0)
-        state.observe({
-            "level": "WARNING", "name": "homeassistant.loader",
             "source": "loader.py:833", "message": ["Other relevant loader warning"],
         }, T0)
         saved = state.snapshot()
+        # Simulate a pending group persisted by the previous release.
+        saved["groups"]["legacy_notice"] = {
+            "level": "WARNING", "logger": "homeassistant.loader",
+            "source": "loader.py:833",
+            "message": CUSTOM_INTEGRATION_NOTICE.format("resmed_myair"),
+            "exception": "", "last": T0.isoformat(), "unreported": 3,
+        }
         restored = ErrorDigestState(saved)
         self.assertEqual(len(restored.groups), 1)
         self.assertTrue(restored.dirty)
-        self.assertEqual(restored.revision, 1)
+        self.assertEqual(restored.ignored["untested_custom_integration"]["pending"], 3)
         self.assertEqual(next(iter(restored.groups.values()))["message"], "Other relevant loader warning")
         self.assertEqual(len(saved["groups"]), 2)
+
+    def test_fujitsu_cloud_timeout_is_counted_not_reported_individually(self):
+        state = ErrorDigestState()
+        for i in range(7):
+            self.assertFalse(state.observe({
+                "level": "ERROR", "name": "pyfujitsugeneral",
+                "source": "custom_components/fglair_heatpump_controller/climate.py:80",
+                "message": [FUJITSU_TIMEOUT], "exception": "",
+            }, T0 + timedelta(minutes=i)))
+        self.assertFalse(state.groups)
+        self.assertFalse(state.ready(T0 + INITIAL, INITIAL, COOLDOWN, REPEAT))
+        self.assertEqual(state.ignored["fujitsu_ayla_timeout"]["pending"], 7)
+        self.assertFalse(state.ignored_due(T0 + timedelta(hours=23), COOLDOWN))
+        self.assertTrue(state.ignored_due(T0 + timedelta(hours=24), COOLDOWN))
+        title, message = summarize([], state.pending_ignored())
+        self.assertIn("7 ignored ERROR", title)
+        self.assertIn("Fujitsu/Ayla cloud properties fetch timeouts: 7 ERROR", message)
+        self.assertNotIn("AC000W002919187", message)
+
+    def test_other_fujitsu_errors_and_unexpected_timeouts_remain_actionable(self):
+        state = ErrorDigestState()
+        for name, source, message, exception in (
+            ("pyfujitsugeneral", "custom_components/fglair_heatpump_controller/climate.py:80",
+             "Authentication failed fetching FGLair", ""),
+            ("pyfujitsugeneral", "custom_components/fglair_heatpump_controller/climate.py:80",
+             FUJITSU_TIMEOUT.replace("properties.json", "status.json"), ""),
+            ("pyfujitsugeneral", "custom_components/another/climate.py:80", FUJITSU_TIMEOUT, ""),
+            ("some_other_library", "custom_components/fglair_heatpump_controller/climate.py:80",
+             FUJITSU_TIMEOUT, ""),
+            ("pyfujitsugeneral", "custom_components/fglair_heatpump_controller/climate.py:80",
+             FUJITSU_TIMEOUT, "TimeoutError: persistent failure"),
+        ):
+            self.assertTrue(state.observe({
+                "level": "ERROR", "name": name, "source": source,
+                "message": [message], "exception": exception,
+            }, T0))
+        self.assertEqual(len(state.groups), 5)
+
+    def test_known_noise_summary_is_restart_safe_and_keeps_new_events(self):
+        state = ErrorDigestState()
+        event = {
+            "level": "ERROR", "name": "pyfujitsugeneral",
+            "source": "custom_components/fglair_heatpump_controller/climate.py:80",
+            "message": [FUJITSU_TIMEOUT], "exception": "",
+        }
+        state.observe(event, T0)
+        snapshot = deepcopy(state.pending_ignored())
+        state.observe(event, T0 + timedelta(minutes=1))
+        state.acknowledge_ignored(snapshot, T0 + timedelta(hours=24))
+        self.assertEqual(state.ignored["fujitsu_ayla_timeout"]["pending"], 1)
+        restored = ErrorDigestState(state.snapshot())
+        self.assertEqual(restored.ignored["fujitsu_ayla_timeout"]["pending"], 1)
+        self.assertFalse(restored.ignored_due(T0 + timedelta(hours=25), COOLDOWN))
+        self.assertTrue(restored.ignored_due(T0 + timedelta(hours=49), COOLDOWN))
+
+    def test_daily_known_noise_summary_does_not_delay_real_errors(self):
+        state = ErrorDigestState()
+        state.observe({
+            "level": "WARNING", "name": "homeassistant.loader",
+            "source": "loader.py:833",
+            "message": [CUSTOM_INTEGRATION_NOTICE.format("ps3")],
+        }, T0)
+        self.assertTrue(state.ignored_due(T0 + timedelta(hours=24), COOLDOWN))
+        state.acknowledge_ignored(deepcopy(state.pending_ignored()), T0 + timedelta(hours=24))
+        state.observe(error(), T0 + timedelta(hours=24, minutes=1))
+        self.assertTrue(state.ready(T0 + timedelta(hours=24, minutes=3),
+                                    INITIAL, COOLDOWN, REPEAT))
+        self.assertFalse(state.ignored_due(T0 + timedelta(hours=25), COOLDOWN))
+
+    def test_actionable_digest_contains_compact_ignored_summary(self):
+        state = ErrorDigestState()
+        state.observe(error(), T0)
+        state.observe({
+            "level": "WARNING", "name": "homeassistant.loader",
+            "source": "loader.py:833",
+            "message": [CUSTOM_INTEGRATION_NOTICE.format("ps3")],
+        }, T0)
+        batch = state.ready(T0 + INITIAL, INITIAL, COOLDOWN, REPEAT)
+        title, message = summarize(batch, state.pending_ignored())
+        self.assertIn("1 ERROR", title)
+        self.assertIn("Known messages filtered from actionable alerts:", message)
+        self.assertIn("Routine untested custom integration notices: 1 WARNING", message)
+        state.acknowledge(batch, T0 + INITIAL)
+        state.acknowledge_ignored(deepcopy(state.pending_ignored()), T0 + INITIAL)
+        self.assertFalse(state.pending_ignored())
 
     def test_warnings_wait_for_daily_digest(self):
         state = ErrorDigestState()
