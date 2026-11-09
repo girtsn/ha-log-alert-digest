@@ -9,10 +9,12 @@ Home Assistant custom integration for grouped ERROR/WARNING log alerts, rate lim
 - **ERROR:** eligible for a digest after 2 minutes by default.
 - **WARNING:** eligible after 24 hours by default, or bundled with an earlier ERROR digest.
 - **Duplicate entries:** grouped by logger, source, message and final exception line, with counters.
-- **Routine loader notices:** ignores Home Assistant's standard “custom integration has not been tested” warnings in digests, while preserving all other warnings/errors and the original Home Assistant logs.
+- **Known noise categories:** filters Home Assistant's routine untested-custom-integration warnings and narrowly matched Fujitsu/FGLair Ayla cloud `properties.json` fetch timeouts from actionable alerts. Other loader warnings, unrelated timeouts, and Fujitsu errors remain actionable.
+- **Ignored-event counts:** tracks the number of filtered WARNINGs and ERRORs per named category across restarts. A compact breakdown is appended to the next actionable digest; if no actionable entries occur, sends a filtered-only summary once per 24 hours instead. The original messages remain visible in Home Assistant's System Logs.
+- **Delivery safeguards:** filtered-only summaries never reset the urgent error cooldown; failed email sends do not acknowledge the tracked counts.
 - **Email:** sends one grouped email at most every 60 minutes, suppressing repeats of already notified error signatures for 24 hours.
 - **Home Assistant:** creates/updates one persistent notification (`log_error_digest_summary`) per digest, rather than per error.
-- **Storage:** restart-persistent bounded history of up to 200 groups, saved locally in Home Assistant's `.storage`, with 30-day pruning.
+- **Storage:** restart-persistent bounded history of up to 200 groups, saved locally in Home Assistant's `.storage`, with 30-day pruning. Ignored category counters are stored separately and do not consume the 200-group limit.
 - **Resilience:** retries after failed email delivery, with protection against self-notification loops.
 
 Both email and persistent notifications remain enabled, just as in v0.1.0. **v0.2.0 moves configuration into the Home Assistant UI and enables system-log events automatically**, so no YAML is needed for new installations.
