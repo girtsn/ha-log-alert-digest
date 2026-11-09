@@ -9,9 +9,12 @@ Home Assistant custom integration for grouped ERROR/WARNING log alerts, rate lim
 - **ERROR:** eligible for a digest after 2 minutes by default.
 - **WARNING:** eligible after 24 hours by default, or bundled with an earlier ERROR digest.
 - **Duplicate entries:** grouped by logger, source, message and final exception line, with counters.
+- **Known noise categories:** filters routine untested-custom-integration warnings, narrowly matched Fujitsu/FGLair Ayla cloud `properties.json` fetch timeouts, and known 10-second slow-update warnings for `climate.fjac_*` entities. Other loader warnings, unrelated entity timeouts and Fujitsu errors remain actionable.
+- **Ignored-event counts:** tracks the number of filtered WARNINGs and ERRORs per named category across restarts. A compact breakdown is appended to the next actionable digest; if no actionable entries occur, sends a filtered-only summary once per 24 hours instead. The original messages remain visible in Home Assistant's System Logs.
+- **Delivery safeguards:** filtered-only summaries never reset the urgent error cooldown; failed email sends do not acknowledge the tracked counts.
 - **Email:** sends one grouped email at most every 60 minutes, suppressing repeats of already notified error signatures for 24 hours.
-- **Home Assistant:** creates/updates one persistent notification (`log_error_digest_summary`) per digest, rather than per error.
-- **Storage:** restart-persistent bounded history of up to 200 groups, saved locally in Home Assistant's `.storage`, with 30-day pruning.
+- **Home Assistant:** uses two stable, updating persistent notification IDs: `log_error_digest_summary` for actionable digests and `log_error_digest_ignored_summary` for known-noise-only summaries. An ignored-only summary cannot replace a previous actionable notification.
+- **Storage:** restart-persistent bounded history of up to 200 groups, saved locally in Home Assistant's `.storage`, with 30-day pruning. Ignored category counters are stored separately and do not consume the 200-group limit.
 - **Resilience:** retries after failed email delivery, with protection against self-notification loops.
 
 Both email and persistent notifications remain enabled, just as in v0.1.0. **v0.2.0 moves configuration into the Home Assistant UI and enables system-log events automatically**, so no YAML is needed for new installations.
@@ -19,7 +22,7 @@ Both email and persistent notifications remain enabled, just as in v0.1.0. **v0.
 ## Install with HACS / Marketplace
 
 1. Add `https://github.com/girtsn/ha-log-alert-digest` as a custom **Integration** repository in HACS / Marketplace.
-2. Install the **published v0.2.0 GitHub Release** (not a commit snapshot) and restart Home Assistant.
+2. Install the **latest published GitHub Release** (not a commit snapshot) and restart Home Assistant.
 3. Open **Settings → Devices & services → Add integration → Log Alert Digest**.
 4. Review the automatically suggested `notify.*` entity (prefers one containing `email`), subject prefix and notification timings. Save.
 
