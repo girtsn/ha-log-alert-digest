@@ -224,6 +224,66 @@ class DigestTests(unittest.TestCase):
         state.acknowledge_ignored(deepcopy(state.pending_ignored()), T0 + INITIAL)
         self.assertFalse(state.pending_ignored())
 
+    def test_known_fujitsu_slow_entity_updates_are_aggregated(self):
+        state = ErrorDigestState()
+        for entity in ("climate.fjac_1fl_yard_bedr", "climate.fjac_0fl_living_room"):
+            for _ in range(3):
+                self.assertFalse(state.observe({
+                    "level": "WARNING",
+                    "name": "homeassistant.helpers.entity",
+                    "source": "helpers/entity.py:1390",
+                    "message": [f"Update of {entity} is taking over 10 seconds"],
+                    "exception": "",
+                }, T0))
+        self.assertFalse(state.groups)
+        self.assertEqual(state.ignored["fujitsu_slow_climate_update"]["pending"], 6)
+        title, message = summarize([], state.pending_ignored())
+        self.assertIn("6 ignored WARNING", title)
+        self.assertIn("Fujitsu climate updates taking over 10 seconds: 6 WARNING", message)
+        self.assertNotIn("fjac_1fl_yard_bedr", message)
+        restored = ErrorDigestState(state.snapshot())
+        self.assertEqual(restored.ignored["fujitsu_slow_climate_update"]["pending"], 6)
+
+    def test_unrelated_slow_updates_and_other_entity_warnings_are_not_filtered(self):
+        state = ErrorDigestState()
+        for level, logger, source, message in (
+            ("WARNING", "homeassistant.helpers.entity", "helpers/entity.py:1390",
+             "Update of climate.other_room is taking over 10 seconds"),
+            ("WARNING", "homeassistant.helpers.entity", "helpers/entity.py:1390",
+             "Update of climate.fjac_1fl_yard_bedr is taking over 30 seconds"),
+            ("WARNING", "homeassistant.helpers.entity", "helpers/entity.py:1390",
+             "Update of climate.fjac_1fl_yard_bedr failed"),
+            ("ERROR", "homeassistant.helpers.entity", "helpers/entity.py:1390",
+             "Update of climate.fjac_1fl_yard_bedr is taking over 10 seconds"),
+            ("WARNING", "custom_components.other", "helpers/entity.py:1390",
+             "Update of climate.fjac_1fl_yard_bedr is taking over 10 seconds"),
+        ):
+            self.assertTrue(state.observe({
+                "level": level, "name": logger, "source": source,
+                "message": [message], "exception": "",
+            }, T0))
+        self.assertEqual(len(state.groups), 5)
+        self.assertFalse(state.ignored)
+
+    def test_upgrade_reclassifies_pending_fujitsu_slow_updates(self):
+        state = ErrorDigestState()
+        old = {
+            "groups": {
+                "legacy_fjac_slow_update": {
+                    "level": "WARNING",
+                    "logger": "homeassistant.helpers.entity",
+                    "source": "helpers/entity.py:1390",
+                    "message": "Update of climate.fjac_0fl_living_room is taking over 10 seconds",
+                    "exception": "",
+                    "last": T0.isoformat(),
+                    "unreported": 4,
+                }
+            }
+        }
+        state = ErrorDigestState(old)
+        self.assertFalse(state.groups)
+        self.assertEqual(state.ignored["fujitsu_slow_climate_update"]["pending"], 4)
+
     def test_warnings_wait_for_daily_digest(self):
         state = ErrorDigestState()
         state.observe({**error(), "level": "WARNING"}, T0)
