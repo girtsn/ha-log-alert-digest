@@ -9,6 +9,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "custom_components"
 from model import ErrorDigestState, summarize
 
 T0 = datetime(2026, 11, 8, 9, 10, tzinfo=timezone.utc)
+CUSTOM_INTEGRATION_NOTICE = (
+    "We found a custom integration {} which has not been tested by Home Assistant. "
+    "This component might cause stability problems, be sure to disable it "
+    "if you experience issues with Home Assistant"
+)
 INITIAL = timedelta(minutes=2)
 COOLDOWN = timedelta(minutes=60)
 REPEAT = timedelta(hours=24)
@@ -78,6 +83,54 @@ class DigestTests(unittest.TestCase):
             state.observe(error(exception=f"ErrorCode: {index}"), T0)
         self.assertLessEqual(len(state.groups), 200)
         self.assertIn("other_ERROR", state.groups)
+
+    def test_standard_custom_integration_notices_are_ignored(self):
+        state = ErrorDigestState()
+        for domain in ("resmed_myair", "ps3", "other_custom_integration"):
+            accepted = state.observe({
+                "level": "WARNING",
+                "name": "homeassistant.loader",
+                "source": "loader.py:833",
+                "message": [CUSTOM_INTEGRATION_NOTICE.format(domain)],
+                "exception": "",
+            }, T0)
+            self.assertFalse(accepted)
+        self.assertFalse(state.groups)
+        self.assertFalse(state.dirty)
+
+    def test_other_loader_warnings_and_real_errors_are_retained(self):
+        state = ErrorDigestState()
+        notice = CUSTOM_INTEGRATION_NOTICE.format("ps3")
+        for level, logger, message in (
+            ("WARNING", "homeassistant.loader", "Could not load custom integration ps3"),
+            ("ERROR", "homeassistant.loader", notice),
+            ("WARNING", "custom_components.ps3", notice),
+            ("WARNING", "homeassistant.loader", notice + " Unexpected extra details"),
+        ):
+            self.assertTrue(state.observe({
+                "level": level, "name": logger,
+                "source": "loader.py:833", "message": [message],
+            }, T0))
+        self.assertEqual(len(state.groups), 4)
+
+    def test_upgrade_drops_previous_notice_groups_but_keeps_other_warnings(self):
+        state = ErrorDigestState()
+        state.observe({
+            "level": "WARNING", "name": "homeassistant.loader",
+            "source": "loader.py:833",
+            "message": [CUSTOM_INTEGRATION_NOTICE.format("resmed_myair")],
+        }, T0)
+        state.observe({
+            "level": "WARNING", "name": "homeassistant.loader",
+            "source": "loader.py:833", "message": ["Other relevant loader warning"],
+        }, T0)
+        saved = state.snapshot()
+        restored = ErrorDigestState(saved)
+        self.assertEqual(len(restored.groups), 1)
+        self.assertTrue(restored.dirty)
+        self.assertEqual(restored.revision, 1)
+        self.assertEqual(next(iter(restored.groups.values()))["message"], "Other relevant loader warning")
+        self.assertEqual(len(saved["groups"]), 2)
 
     def test_warnings_wait_for_daily_digest(self):
         state = ErrorDigestState()
