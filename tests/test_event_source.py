@@ -55,7 +55,7 @@ class EventActivationTests(unittest.TestCase):
             (ROOT / "custom_components" / "log_error_digest" / "manifest.json").read_text()
         )
         version = manifest["version"]
-        self.assertRegex(version, r"^\\d+\\.\\d+\\.\\d+$")
+        self.assertRegex(version, r"^\d+\.\d+\.\d+$")
         self.assertTrue((ROOT / f"RELEASE_NOTES_{version}.md").is_file())
         self.assertTrue(manifest["config_flow"])
         self.assertTrue(manifest["single_config_entry"])
