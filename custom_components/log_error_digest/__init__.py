@@ -146,11 +146,12 @@ class LogErrorDigest:
             now = utcnow()
             self.state.prune(now)
             ready = self.state.ready(now, self.initial, self.cooldown, self.repeat, self.warning_delay)
-            if ready:
-                # Deep-copy counts to avoid losing events that arrive while
-                # the awaited notify service processes an outgoing email.
+            if ready or self.state.ignored_due(now, self.cooldown):
+                # Capture both actionable and filtered counts; events arriving
+                # during the await are kept for the following digest.
                 batch = deepcopy(ready)
-                title, message = summarize(batch)
+                ignored_batch = deepcopy(self.state.pending_ignored())
+                title, message = summarize(batch, ignored_batch)
                 title = f"{self.prefix} {title}".strip()
                 # Keep one HA notification even if email delivery is down.
                 # The fixed notification ID prevents a UI notification flood.
@@ -175,7 +176,12 @@ class LogErrorDigest:
                     LOGGER.warning("Error digest delivery failed; retrying in 5 minutes", exc_info=True)
                     self.state.mark_failed(now)
                 else:
-                    self.state.acknowledge(batch, now)
+                    if batch:
+                        self.state.acknowledge(batch, now)
+                    if ignored_batch:
+                        # Suppressed-only daily emails do not reset the regular
+                        # ERROR cooldown, so fresh real errors are not delayed.
+                        self.state.acknowledge_ignored(ignored_batch, now)
             if self.state.dirty:
                 revision = self.state.revision
                 await self.store.async_save(deepcopy(self.state.snapshot()))
