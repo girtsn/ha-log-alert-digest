@@ -23,9 +23,15 @@ _FUJITSU_AYLA_TIMEOUT = re.compile(
     r"Timeout error fetching information from "
     r"https://ads-field-eu\.aylanetworks\.com/apiv1/dsns/[^/\s]+/properties\.json\s*-?\s*"
 )
+# Some FGLair/Ayla-backed climate entities take longer than HA's 10-second
+# warning threshold. Limit filtering to the known fjac_* entity family.
+_FUJITSU_SLOW_ENTITY_UPDATE = re.compile(
+    r"Update of climate\.fjac_[a-z0-9_]+ is taking over 10 seconds"
+)
 IGNORED_CATEGORIES = {
     "untested_custom_integration": ("WARNING", "Routine untested custom integration notices"),
     "fujitsu_ayla_timeout": ("ERROR", "Fujitsu/Ayla cloud properties fetch timeouts"),
+    "fujitsu_slow_climate_update": ("WARNING", "Fujitsu climate updates taking over 10 seconds"),
 }
 IGNORED_SUMMARY_INTERVAL = timedelta(hours=24)
 
@@ -40,6 +46,10 @@ def _ignored_category(level: str, logger: str, source: str,
             and source.startswith("custom_components/fglair_heatpump_controller/")
             and not exception and _FUJITSU_AYLA_TIMEOUT.fullmatch(message)):
         return "fujitsu_ayla_timeout"
+    if (level == "WARNING" and logger == "homeassistant.helpers.entity"
+            and source.startswith(("helpers/entity.py", "homeassistant/helpers/entity.py"))
+            and not exception and _FUJITSU_SLOW_ENTITY_UPDATE.fullmatch(message)):
+        return "fujitsu_slow_climate_update"
     return None
 
 
