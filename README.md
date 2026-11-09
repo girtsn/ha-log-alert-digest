@@ -9,7 +9,7 @@ Home Assistant custom integration for grouped ERROR/WARNING log alerts, rate lim
 - **ERROR:** eligible for a digest after 2 minutes by default.
 - **WARNING:** eligible after 24 hours by default, or bundled with an earlier ERROR digest.
 - **Duplicate entries:** grouped by logger, source, message and final exception line, with counters.
-- **Known noise categories:** filters Home Assistant's routine untested-custom-integration warnings and narrowly matched Fujitsu/FGLair Ayla cloud `properties.json` fetch timeouts from actionable alerts. Other loader warnings, unrelated timeouts, and Fujitsu errors remain actionable.
+- **Known noise categories:** filters routine untested-custom-integration warnings, narrowly matched Fujitsu/FGLair Ayla cloud `properties.json` fetch timeouts, and known 10-second slow-update warnings for `climate.fjac_*` entities. Other loader warnings, unrelated entity timeouts and Fujitsu errors remain actionable.
 - **Ignored-event counts:** tracks the number of filtered WARNINGs and ERRORs per named category across restarts. A compact breakdown is appended to the next actionable digest; if no actionable entries occur, sends a filtered-only summary once per 24 hours instead. The original messages remain visible in Home Assistant's System Logs.
 - **Delivery safeguards:** filtered-only summaries never reset the urgent error cooldown; failed email sends do not acknowledge the tracked counts.
 - **Email:** sends one grouped email at most every 60 minutes, suppressing repeats of already notified error signatures for 24 hours.
