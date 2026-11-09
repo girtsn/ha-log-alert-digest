@@ -9,6 +9,7 @@ Home Assistant custom integration for grouped ERROR/WARNING log alerts, rate lim
 - **ERROR:** eligible for a digest after 2 minutes by default.
 - **WARNING:** eligible after 24 hours by default, or bundled with an earlier ERROR digest.
 - **Duplicate entries:** grouped by logger, source, message and final exception line, with counters.
+- **Routine loader notices:** ignores Home Assistant's standard “custom integration has not been tested” warnings in digests, while preserving all other warnings/errors and the original Home Assistant logs.
 - **Email:** sends one grouped email at most every 60 minutes, suppressing repeats of already notified error signatures for 24 hours.
 - **Home Assistant:** creates/updates one persistent notification (`log_error_digest_summary`) per digest, rather than per error.
 - **Storage:** restart-persistent bounded history of up to 200 groups, saved locally in Home Assistant's `.storage`, with 30-day pruning.
@@ -19,7 +20,7 @@ Both email and persistent notifications remain enabled, just as in v0.1.0. **v0.
 ## Install with HACS / Marketplace
 
 1. Add `https://github.com/girtsn/ha-log-alert-digest` as a custom **Integration** repository in HACS / Marketplace.
-2. Install the **published v0.2.0 GitHub Release** (not a commit snapshot) and restart Home Assistant.
+2. Install the **latest published GitHub Release** (not a commit snapshot) and restart Home Assistant.
 3. Open **Settings → Devices & services → Add integration → Log Alert Digest**.
 4. Review the automatically suggested `notify.*` entity (prefers one containing `email`), subject prefix and notification timings. Save.
 
