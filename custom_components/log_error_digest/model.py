@@ -21,7 +21,7 @@ _CUSTOM_INTEGRATION_NOTICE = re.compile(
 # controller. Other failures, including timeouts on other endpoints, stay actionable.
 _FUJITSU_AYLA_TIMEOUT = re.compile(
     r"Timeout error fetching information from "
-    r"https://ads-field-eu\\.aylanetworks\\.com/apiv1/dsns/[^/\\s]+/properties\\.json\\s*-?\\s*"
+    r"https://ads-field-eu\.aylanetworks\.com/apiv1/dsns/[^/\s]+/properties\.json\s*-?\s*"
 )
 IGNORED_CATEGORIES = {
     "untested_custom_integration": ("WARNING", "Routine untested custom integration notices"),
@@ -301,4 +301,4 @@ def summarize(entries: list[tuple[str, dict]],
                 level, label = IGNORED_CATEGORIES[category]
                 lines.append(f"- {label}: {ignored[category]['pending']} {level}(s)")
         lines.append("These events were counted, not silently discarded.")
-    return headline, "\\n".join(lines)
+    return headline, "\n".join(lines)
