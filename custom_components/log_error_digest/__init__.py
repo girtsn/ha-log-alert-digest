@@ -153,13 +153,17 @@ class LogErrorDigest:
                 ignored_batch = deepcopy(self.state.pending_ignored())
                 title, message = summarize(batch, ignored_batch)
                 title = f"{self.prefix} {title}".strip()
-                # Keep one HA notification even if email delivery is down.
-                # The fixed notification ID prevents a UI notification flood.
+                # Keep actionable warnings visible when an ignored-only summary
+                # arrives later. Two stable IDs prevent notification floods.
+                notification_id = (
+                    "log_error_digest_summary" if batch
+                    else "log_error_digest_ignored_summary"
+                )
                 try:
                     await self.hass.services.async_call(
                         "persistent_notification", "create",
                         {"title": title, "message": message,
-                         "notification_id": "log_error_digest_summary"},
+                         "notification_id": notification_id},
                         blocking=True,
                     )
                 except Exception:
