@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import importlib.util
 import json
+import re
 import unittest
 
 
@@ -53,7 +54,9 @@ class EventActivationTests(unittest.TestCase):
         manifest = json.loads(
             (ROOT / "custom_components" / "log_error_digest" / "manifest.json").read_text()
         )
-        self.assertEqual(manifest["version"], "0.2.0")
+        version = manifest["version"]
+        self.assertRegex(version, r"^\\d+\\.\\d+\\.\\d+$")
+        self.assertTrue((ROOT / f"RELEASE_NOTES_{version}.md").is_file())
         self.assertTrue(manifest["config_flow"])
         self.assertTrue(manifest["single_config_entry"])
         self.assertIn("system_log", manifest["dependencies"])
