@@ -28,6 +28,13 @@ FUJITSU_TEMPERATURE_DEPRECATION = (
     "Home Assistant 2027.11, use native_current_temperature instead, "
     "please report it to the custom integration author"
 )
+WITHINGS_WARNING = {
+    "level": "WARNING", "name": "homeassistant.components.withings",
+    "source": "components/withings/__init__.py:312",
+    "message": ["Webhook not registered - port 443 is required. See "
+                "https://www.home-assistant.io/integrations/withings/#webhook-requirements"],
+    "exception": "",
+}
 INITIAL = timedelta(minutes=2)
 COOLDOWN = timedelta(minutes=60)
 REPEAT = timedelta(hours=24)
@@ -37,6 +44,19 @@ def error(name="homeassistant", msg="Task exception was never retrieved", except
     return {"level": "ERROR", "name": name,
             "source": "custom_components/device_availability_digest/__init__.py:297",
             "message": [msg], "exception": f"Traceback...\n{exception}"}
+
+
+def sma_warning(key, name, unit="kWh", factor=1000):
+    sensor = (
+        f"Sensor(key='{key}', name='{name}', unit={unit!r}, factor={factor}, path=None, "
+        "enabled=True, l10n_translate=False, value=None, mapped_value=None, "
+        "range=None, webconnect_deviceId=None)"
+    )
+    return {
+        "level": "WARNING", "name": "pysmaplus.sensor",
+        "source": "custom_components/pysmaplus/__init__.py:113",
+        "message": [f"Replacing sensor {sensor} with {sensor}"], "exception": "",
+    }
 
 
 class DigestTests(unittest.TestCase):
@@ -160,10 +180,12 @@ class DigestTests(unittest.TestCase):
         self.assertFalse(state.groups)
         self.assertFalse(state.ready(T0 + INITIAL, INITIAL, COOLDOWN, REPEAT))
         self.assertEqual(state.ignored["fujitsu_ayla_timeout"]["pending"], 7)
-        self.assertFalse(state.ignored_due(T0 + timedelta(hours=23), COOLDOWN))
-        self.assertTrue(state.ignored_due(T0 + timedelta(hours=24), COOLDOWN))
-        title, message = summarize([], state.pending_ignored())
-        self.assertIn("7 ignored ERROR", title)
+        later = T0 + timedelta(hours=48)
+        self.assertFalse(state.ignored_due(later, COOLDOWN))
+        state.observe(error(), later)
+        batch = state.ready(later + INITIAL, INITIAL, COOLDOWN, REPEAT)
+        title, message = summarize(batch, state.pending_ignored())
+        self.assertIn("1 ERROR", title)
         self.assertIn("Fujitsu/Ayla cloud properties fetch timeouts: 7 ERROR", message)
         self.assertNotIn("AC000W002919187", message)
 
@@ -188,7 +210,7 @@ class DigestTests(unittest.TestCase):
             self.assertTrue(state.observe({**event, **change}, T0))
         self.assertEqual(len(state.groups), 4)
 
-    def test_fujitsu_current_temperature_deprecation_is_aggregated(self):
+    def test_fujitsu_temperature_deprecations_are_aggregated(self):
         state = ErrorDigestState()
         event = {
             "level": "WARNING",
@@ -197,47 +219,113 @@ class DigestTests(unittest.TestCase):
             "message": [FUJITSU_TEMPERATURE_DEPRECATION],
             "exception": "",
         }
-        for _ in range(4):
-            self.assertFalse(state.observe(event, T0))
+        for attribute in ("current_temperature", "target_temperature", "temperature_unit"):
+            with self.subTest(attribute=attribute):
+                message = FUJITSU_TEMPERATURE_DEPRECATION.replace("current_temperature", attribute)
+                self.assertFalse(state.observe({**event, "message": [message]}, T0))
         self.assertFalse(state.groups)
-        self.assertEqual(state.ignored["fujitsu_temperature_deprecation"]["pending"], 4)
-        title, summary = summarize([], state.pending_ignored())
-        self.assertIn("4 ignored WARNING", title)
-        self.assertIn("Fujitsu climate current_temperature deprecation notices: 4 WARNING", summary)
+        self.assertEqual(state.ignored["fujitsu_temperature_deprecation"]["pending"], 3)
+        self.assertFalse(state.ignored_due(T0 + timedelta(hours=48), COOLDOWN))
+        state.observe(error(), T0)
+        batch = state.ready(T0 + INITIAL, INITIAL, COOLDOWN, REPEAT)
+        _, summary = summarize(batch, state.pending_ignored())
+        self.assertIn("Fujitsu climate temperature deprecation notices: 3 WARNING", summary)
         self.assertNotIn("FujitsuClimate", summary)
 
         for change in (
             {"message": [FUJITSU_TEMPERATURE_DEPRECATION.replace(
                 "current_temperature", "temperature_offset")]},
+            {"message": [FUJITSU_TEMPERATURE_DEPRECATION.replace(
+                "native_current_temperature", "native_target_temperature")]},
             {"name": "custom_components.unrelated.climate"},
             {"source": "helpers/entity.py:706"},
             {"level": "ERROR"},
             {"exception": "RuntimeError: another issue"},
         ):
             self.assertTrue(state.observe({**event, **change}, T0))
-        self.assertEqual(len(state.groups), 5)
+        self.assertEqual(len(state.groups), 7)
 
-    def test_upgrade_reclassifies_existing_fujitsu_examples(self):
+    def test_upgrade_reclassifies_pending_count_only_examples(self):
         state = ErrorDigestState()
+        sma = sma_warning("Metering.GridMs.TotWhOut.Bat", "battery_discharge_total")
         sample_events = (
-            ("ERROR", "pyfujitsugeneral",
+            ("fujitsu_ayla_timeout", "ERROR", "pyfujitsugeneral",
              "custom_components/fglair_heatpump_controller/climate.py:617",
              FUJITSU_DATAPOINT_TIMEOUT),
-            ("WARNING", "custom_components.fglair_heatpump_controller.climate",
-             "helpers/deprecation.py:706", FUJITSU_TEMPERATURE_DEPRECATION),
+            ("fujitsu_temperature_deprecation", "WARNING",
+             "custom_components.fglair_heatpump_controller.climate", "helpers/deprecation.py:706",
+             FUJITSU_TEMPERATURE_DEPRECATION.replace("current_temperature", "target_temperature")),
+            ("withings_webhook_port", "WARNING", WITHINGS_WARNING["name"],
+             WITHINGS_WARNING["source"], WITHINGS_WARNING["message"][0]),
+            ("sma_sensor_replacement", "WARNING", sma["name"], sma["source"], sma["message"][0][:320]),
         )
-        for level, name, source, message in sample_events:
+        for category, level, name, source, message in sample_events:
             # Mimic stored groups saved by the prior unfiltered version.
-            state.groups[name] = {
+            state.groups[category] = {
                 "level": level, "logger": name, "source": source,
                 "message": message, "exception": "", "last": T0.isoformat(),
                 "unreported": 2, "total": 3,
             }
         restored = ErrorDigestState(state.snapshot())
         self.assertFalse(restored.groups)
-        self.assertEqual(restored.ignored["fujitsu_ayla_timeout"]["pending"], 2)
-        self.assertEqual(restored.ignored["fujitsu_temperature_deprecation"]["pending"], 2)
+        self.assertEqual({key: item["pending"] for key, item in restored.ignored.items()},
+                         {sample[0]: 2 for sample in sample_events})
+        self.assertFalse(restored.ignored_due(T0 + timedelta(hours=48), COOLDOWN))
         self.assertTrue(restored.dirty)
+
+    def test_withings_and_sma_warnings_are_counted_without_standalone_alerts(self):
+        state = ErrorDigestState()
+        self.assertFalse(state.observe(WITHINGS_WARNING, T0))
+        for key, name, unit, factor in (
+            ("Metering.GridMs.TotWhIn.Bat", "battery_charge_total", "kWh", 1000),
+            ("Metering.GridMs.TotWhOut.Bat", "battery_discharge_total", "kWh", 1000),
+            ("DcMs.TotDcEnCntWh.1", "pv_total_power_a", "kWh", 1000),
+            ("DcMs.TotDcEnCntWh.3", "pv_total_power_c", "kWh", 1000),
+            ("Operation.BckStt", "backup_mode_status", None, 1),
+            ("GridMs.A.phsA", "current_l1", "A", 1),
+        ):
+            with self.subTest(sensor=name):
+                self.assertFalse(state.observe(sma_warning(key, name, unit, factor), T0))
+        self.assertFalse(state.groups)
+        self.assertFalse(state.ignored_due(T0 + timedelta(hours=48), COOLDOWN))
+        self.assertEqual(state.ignored["withings_webhook_port"]["pending"], 1)
+        self.assertEqual(state.ignored["sma_sensor_replacement"]["pending"], 6)
+
+        # Older noise cannot advance the clock for a separate legacy summary.
+        later = T0 + timedelta(hours=48)
+        state.observe({
+            "level": "WARNING", "name": "homeassistant.loader",
+            "source": "loader.py:833",
+            "message": [CUSTOM_INTEGRATION_NOTICE.format("ps3")],
+        }, later)
+        self.assertFalse(state.ignored_due(later, COOLDOWN))
+        self.assertTrue(state.ignored_due(later + REPEAT, COOLDOWN))
+        self.assertEqual(set(state.pending_ignored(include_count_only=False)),
+                         {"untested_custom_integration"})
+        state.observe(error(), later)
+        batch = state.ready(later + INITIAL, INITIAL, COOLDOWN, REPEAT)
+        _, summary = summarize(batch, state.pending_ignored())
+        self.assertIn("Withings webhook port 443 warnings: 1 WARNING", summary)
+        self.assertIn("SMA known sensor replacement warnings: 6 WARNING", summary)
+        self.assertNotIn("Replacing sensor Sensor(", summary)
+        self.assertNotIn("#webhook-requirements", summary)
+
+    def test_other_withings_and_sma_problems_remain_actionable(self):
+        state = ErrorDigestState()
+        sma = sma_warning("DcMs.TotDcEnCntWh.1", "pv_total_power_a")
+        old, replacement = sma["message"][0].split(" with ")
+        for event in (
+            {**WITHINGS_WARNING, "message": ["Webhook not registered - callback rejected"]},
+            {**WITHINGS_WARNING, "level": "ERROR"},
+            {**WITHINGS_WARNING, "exception": "RuntimeError: setup failed"},
+            {**sma, "message": [f"{old} with {replacement.replace('pv_total_power_a', 'pv_total_power_b')}"]},
+            {**sma, "source": "custom_components/other/__init__.py:113"},
+            {**sma, "exception": "ValueError: bad sensor mapping"},
+            sma_warning("DcMs.TotDcEnCntWh.2", "pv_total_power_b"),
+        ):
+            with self.subTest(event=event):
+                self.assertTrue(state.observe(event, T0))
+        self.assertFalse(state.ignored)
 
     def test_other_fujitsu_errors_and_unexpected_timeouts_remain_actionable(self):
         state = ErrorDigestState()
@@ -261,17 +349,17 @@ class DigestTests(unittest.TestCase):
     def test_known_noise_summary_is_restart_safe_and_keeps_new_events(self):
         state = ErrorDigestState()
         event = {
-            "level": "ERROR", "name": "pyfujitsugeneral",
-            "source": "custom_components/fglair_heatpump_controller/climate.py:80",
-            "message": [FUJITSU_TIMEOUT], "exception": "",
+            "level": "WARNING", "name": "homeassistant.loader",
+            "source": "loader.py:833",
+            "message": [CUSTOM_INTEGRATION_NOTICE.format("ps3")],
         }
         state.observe(event, T0)
         snapshot = deepcopy(state.pending_ignored())
         state.observe(event, T0 + timedelta(minutes=1))
         state.acknowledge_ignored(snapshot, T0 + timedelta(hours=24))
-        self.assertEqual(state.ignored["fujitsu_ayla_timeout"]["pending"], 1)
+        self.assertEqual(state.ignored["untested_custom_integration"]["pending"], 1)
         restored = ErrorDigestState(state.snapshot())
-        self.assertEqual(restored.ignored["fujitsu_ayla_timeout"]["pending"], 1)
+        self.assertEqual(restored.ignored["untested_custom_integration"]["pending"], 1)
         self.assertFalse(restored.ignored_due(T0 + timedelta(hours=25), COOLDOWN))
         self.assertTrue(restored.ignored_due(T0 + timedelta(hours=49), COOLDOWN))
 

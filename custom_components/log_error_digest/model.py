@@ -24,12 +24,11 @@ _FUJITSU_AYLA_TIMEOUT = re.compile(
     r"https://ads-field-eu\.aylanetworks\.com/apiv1/"
     r"(?:dsns/[^/\s]+/properties\.json|properties/\d+/datapoints\.json)\s*-?\s*"
 )
-# Specific HA deprecation from the FGLair climate class. The integration
-# author must still migrate to native_current_temperature before HA 2027.11.
+# Match the three temperature deprecations from the FGLair climate class.
 _FUJITSU_TEMPERATURE_DEPRECATION = re.compile(
     r"custom_components\.fglair_heatpump_controller\.climate::FujitsuClimate "
-    r"provides the deprecated current_temperature, this will stop working in "
-    r"Home Assistant \d{4}\.\d{1,2}, use native_current_temperature instead, "
+    r"provides the deprecated (?P<attribute>current_temperature|target_temperature|temperature_unit), "
+    r"this will stop working in Home Assistant \d{4}\.\d{1,2}, use native_(?P=attribute) instead, "
     r"please report it to the custom integration author"
 )
 # Some FGLair/Ayla-backed climate entities take longer than HA's 10-second
@@ -37,11 +36,37 @@ _FUJITSU_TEMPERATURE_DEPRECATION = re.compile(
 _FUJITSU_SLOW_ENTITY_UPDATE = re.compile(
     r"Update of climate\.fjac_[a-z0-9_]+ is taking over 10 seconds"
 )
+_WITHINGS_WEBHOOK_PORT_WARNING = (
+    "Webhook not registered - port 443 is required. See "
+    "https://www.home-assistant.io/integrations/withings/#webhook-requirements"
+)
+# Both sensor identities fit in the stored 320-character message, even when
+# the second representation is cut off. Match only known same-identity replacements.
+_SMA_SENSOR_REPLACEMENT = re.compile(
+    r"Replacing sensor Sensor\(key='(?P<key>[^']+)', name='(?P<name>[^']+)', [^)]*\) "
+    r"with Sensor\(key='(?P=key)', name='(?P=name)', "
+)
+_SMA_REPLACEMENT_SENSORS = {
+    ("Metering.GridMs.TotWhIn.Bat", "battery_charge_total"),
+    ("Metering.GridMs.TotWhOut.Bat", "battery_discharge_total"),
+    ("DcMs.TotDcEnCntWh.1", "pv_total_power_a"),
+    ("DcMs.TotDcEnCntWh.3", "pv_total_power_c"),
+    ("Operation.BckStt", "backup_mode_status"),
+    ("GridMs.A.phsA", "current_l1"),
+}
 IGNORED_CATEGORIES = {
     "untested_custom_integration": ("WARNING", "Routine untested custom integration notices"),
     "fujitsu_ayla_timeout": ("ERROR", "Fujitsu/Ayla cloud properties fetch timeouts"),
     "fujitsu_slow_climate_update": ("WARNING", "Fujitsu climate updates taking over 10 seconds"),
-    "fujitsu_temperature_deprecation": ("WARNING", "Fujitsu climate current_temperature deprecation notices"),
+    "fujitsu_temperature_deprecation": ("WARNING", "Fujitsu climate temperature deprecation notices"),
+    "withings_webhook_port": ("WARNING", "Withings webhook port 443 warnings"),
+    "sma_sensor_replacement": ("WARNING", "SMA known sensor replacement warnings"),
+}
+_COUNT_ONLY_CATEGORIES = {
+    "fujitsu_ayla_timeout",
+    "fujitsu_temperature_deprecation",
+    "withings_webhook_port",
+    "sma_sensor_replacement",
 }
 IGNORED_SUMMARY_INTERVAL = timedelta(hours=24)
 
@@ -65,6 +90,17 @@ def _ignored_category(level: str, logger: str, source: str,
             and source.startswith(("helpers/deprecation.py", "homeassistant/helpers/deprecation.py"))
             and not exception and _FUJITSU_TEMPERATURE_DEPRECATION.fullmatch(message)):
         return "fujitsu_temperature_deprecation"
+    if (level == "WARNING" and logger == "homeassistant.components.withings"
+            and source.startswith(("components/withings/__init__.py",
+                                   "homeassistant/components/withings/__init__.py"))
+            and not exception and message == _WITHINGS_WEBHOOK_PORT_WARNING):
+        return "withings_webhook_port"
+    if (level == "WARNING" and logger == "pysmaplus.sensor"
+            and source.startswith("custom_components/pysmaplus/__init__.py")
+            and not exception):
+        replacement = _SMA_SENSOR_REPLACEMENT.match(message)
+        if replacement and replacement.groups() in _SMA_REPLACEMENT_SENSORS:
+            return "sma_sensor_replacement"
     return None
 
 
@@ -203,15 +239,18 @@ class ErrorDigestState:
         self.dirty = True
         self.revision += 1
 
-    def pending_ignored(self) -> dict[str, dict]:
+    def pending_ignored(self, *, include_count_only: bool = True) -> dict[str, dict]:
         """Return unreported known-noise categories for a single digest."""
-        return {key: value for key, value in self.ignored.items()
-                if value.get("pending", 0) > 0}
+        return {
+            key: value for key, value in self.ignored.items()
+            if value.get("pending", 0) > 0
+            and (include_count_only or key not in _COUNT_ONLY_CATEGORIES)
+        }
 
     def ignored_due(self, now: datetime, min_interval: timedelta,
                     interval: timedelta = IGNORED_SUMMARY_INTERVAL) -> bool:
         """Send ignored-only summaries once daily; don't flood or block errors."""
-        pending = self.pending_ignored()
+        pending = self.pending_ignored(include_count_only=False)
         if not pending or (self.retry_after and now < parse(self.retry_after)):
             return False
         if self.last_sent and now < parse(self.last_sent) + min_interval:
