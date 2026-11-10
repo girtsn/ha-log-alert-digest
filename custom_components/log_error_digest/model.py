@@ -17,11 +17,20 @@ _CUSTOM_INTEGRATION_NOTICE = re.compile(
 )
 
 
-# Match only the exact cloud request timeout observed from Fujitsu's FGLair
-# controller. Other failures, including timeouts on other endpoints, stay actionable.
+# Match only known Ayla EU cloud property-fetch timeouts from Fujitsu FGLair.
+# Other endpoints, transport failures and real device errors remain actionable.
 _FUJITSU_AYLA_TIMEOUT = re.compile(
     r"Timeout error fetching information from "
-    r"https://ads-field-eu\.aylanetworks\.com/apiv1/dsns/[^/\s]+/properties\.json\s*-?\s*"
+    r"https://ads-field-eu\.aylanetworks\.com/apiv1/"
+    r"(?:dsns/[^/\s]+/properties\.json|properties/\d+/datapoints\.json)\s*-?\s*"
+)
+# Specific HA deprecation from the FGLair climate class. The integration
+# author must still migrate to native_current_temperature before HA 2027.11.
+_FUJITSU_TEMPERATURE_DEPRECATION = re.compile(
+    r"custom_components\.fglair_heatpump_controller\.climate::FujitsuClimate "
+    r"provides the deprecated current_temperature, this will stop working in "
+    r"Home Assistant \d{4}\.\d{1,2}, use native_current_temperature instead, "
+    r"please report it to the custom integration author"
 )
 # Some FGLair/Ayla-backed climate entities take longer than HA's 10-second
 # warning threshold. Limit filtering to the known fjac_* entity family.
@@ -32,6 +41,7 @@ IGNORED_CATEGORIES = {
     "untested_custom_integration": ("WARNING", "Routine untested custom integration notices"),
     "fujitsu_ayla_timeout": ("ERROR", "Fujitsu/Ayla cloud properties fetch timeouts"),
     "fujitsu_slow_climate_update": ("WARNING", "Fujitsu climate updates taking over 10 seconds"),
+    "fujitsu_temperature_deprecation": ("WARNING", "Fujitsu climate current_temperature deprecation notices"),
 }
 IGNORED_SUMMARY_INTERVAL = timedelta(hours=24)
 
@@ -50,6 +60,11 @@ def _ignored_category(level: str, logger: str, source: str,
             and source.startswith(("helpers/entity.py", "homeassistant/helpers/entity.py"))
             and not exception and _FUJITSU_SLOW_ENTITY_UPDATE.fullmatch(message)):
         return "fujitsu_slow_climate_update"
+    if (level == "WARNING"
+            and logger == "custom_components.fglair_heatpump_controller.climate"
+            and source.startswith(("helpers/deprecation.py", "homeassistant/helpers/deprecation.py"))
+            and not exception and _FUJITSU_TEMPERATURE_DEPRECATION.fullmatch(message)):
+        return "fujitsu_temperature_deprecation"
     return None
 
 
