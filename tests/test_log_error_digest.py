@@ -18,6 +18,16 @@ FUJITSU_TIMEOUT = (
     "Timeout error fetching information from "
     "https://ads-field-eu.aylanetworks.com/apiv1/dsns/AC000W002919187/properties.json -"
 )
+FUJITSU_DATAPOINT_TIMEOUT = (
+    "Timeout error fetching information from "
+    "https://ads-field-eu.aylanetworks.com/apiv1/properties/125151666/datapoints.json -"
+)
+FUJITSU_TEMPERATURE_DEPRECATION = (
+    "custom_components.fglair_heatpump_controller.climate::FujitsuClimate "
+    "provides the deprecated current_temperature, this will stop working in "
+    "Home Assistant 2027.11, use native_current_temperature instead, "
+    "please report it to the custom integration author"
+)
 INITIAL = timedelta(minutes=2)
 COOLDOWN = timedelta(minutes=60)
 REPEAT = timedelta(hours=24)
@@ -156,6 +166,78 @@ class DigestTests(unittest.TestCase):
         self.assertIn("7 ignored ERROR", title)
         self.assertIn("Fujitsu/Ayla cloud properties fetch timeouts: 7 ERROR", message)
         self.assertNotIn("AC000W002919187", message)
+
+    def test_fujitsu_datapoints_timeout_from_logs_is_ignored(self):
+        state = ErrorDigestState()
+        event = {
+            "level": "ERROR", "name": "pyfujitsugeneral",
+            "source": "custom_components/fglair_heatpump_controller/climate.py:617",
+            "message": [FUJITSU_DATAPOINT_TIMEOUT], "exception": "",
+        }
+        self.assertFalse(state.observe(event, T0))
+        self.assertFalse(state.groups)
+        self.assertEqual(state.ignored["fujitsu_ayla_timeout"]["pending"], 1)
+
+        # Similar URL failures must not be silently hidden.
+        for change in (
+            {"message": [FUJITSU_DATAPOINT_TIMEOUT.replace("datapoints.json", "data.json")]},
+            {"name": "unrelated_library"},
+            {"source": "custom_components/other/climate.py:617"},
+            {"exception": "TimeoutError: disconnected device"},
+        ):
+            self.assertTrue(state.observe({**event, **change}, T0))
+        self.assertEqual(len(state.groups), 4)
+
+    def test_fujitsu_current_temperature_deprecation_is_aggregated(self):
+        state = ErrorDigestState()
+        event = {
+            "level": "WARNING",
+            "name": "custom_components.fglair_heatpump_controller.climate",
+            "source": "helpers/deprecation.py:706",
+            "message": [FUJITSU_TEMPERATURE_DEPRECATION],
+            "exception": "",
+        }
+        for _ in range(4):
+            self.assertFalse(state.observe(event, T0))
+        self.assertFalse(state.groups)
+        self.assertEqual(state.ignored["fujitsu_temperature_deprecation"]["pending"], 4)
+        title, summary = summarize([], state.pending_ignored())
+        self.assertIn("4 ignored WARNING", title)
+        self.assertIn("Fujitsu climate current_temperature deprecation notices: 4 WARNING", summary)
+        self.assertNotIn("FujitsuClimate", summary)
+
+        for change in (
+            {"message": [FUJITSU_TEMPERATURE_DEPRECATION.replace(
+                "current_temperature", "temperature_offset")]},
+            {"name": "custom_components.unrelated.climate"},
+            {"source": "helpers/entity.py:706"},
+            {"level": "ERROR"},
+            {"exception": "RuntimeError: another issue"},
+        ):
+            self.assertTrue(state.observe({**event, **change}, T0))
+        self.assertEqual(len(state.groups), 5)
+
+    def test_upgrade_reclassifies_existing_fujitsu_examples(self):
+        state = ErrorDigestState()
+        sample_events = (
+            ("ERROR", "pyfujitsugeneral",
+             "custom_components/fglair_heatpump_controller/climate.py:617",
+             FUJITSU_DATAPOINT_TIMEOUT),
+            ("WARNING", "custom_components.fglair_heatpump_controller.climate",
+             "helpers/deprecation.py:706", FUJITSU_TEMPERATURE_DEPRECATION),
+        )
+        for level, name, source, message in sample_events:
+            # Mimic stored groups saved by the prior unfiltered version.
+            state.groups[name] = {
+                "level": level, "logger": name, "source": source,
+                "message": message, "exception": "", "last": T0.isoformat(),
+                "unreported": 2, "total": 3,
+            }
+        restored = ErrorDigestState(state.snapshot())
+        self.assertFalse(restored.groups)
+        self.assertEqual(restored.ignored["fujitsu_ayla_timeout"]["pending"], 2)
+        self.assertEqual(restored.ignored["fujitsu_temperature_deprecation"]["pending"], 2)
+        self.assertTrue(restored.dirty)
 
     def test_other_fujitsu_errors_and_unexpected_timeouts_remain_actionable(self):
         state = ErrorDigestState()
