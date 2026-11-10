@@ -9,11 +9,11 @@ Home Assistant custom integration for grouped ERROR/WARNING log alerts, rate lim
 - **ERROR:** eligible for a digest after 2 minutes by default.
 - **WARNING:** eligible after 24 hours by default, or bundled with an earlier ERROR digest.
 - **Duplicate entries:** grouped by logger, source, message and final exception line, with counters.
-- **Known noise categories:** filters routine untested-custom-integration warnings, narrowly matched Fujitsu/FGLair Ayla cloud `properties.json` / `datapoints.json` fetch timeouts, known 10-second slow-update warnings for `climate.fjac_*` entities, and the specific FGLair `FujitsuClimate.current_temperature` deprecation notice. Other loader warnings, unrelated entity timeouts, other deprecations and Fujitsu errors remain actionable. The FGLair author still needs to migrate to `native_current_temperature` before Home Assistant 2027.11.
-- **Ignored-event counts:** tracks the number of filtered WARNINGs and ERRORs per named category across restarts. A compact breakdown is appended to the next actionable digest; if no actionable entries occur, sends a filtered-only summary once per 24 hours instead. The original messages remain visible in Home Assistant's System Logs.
+- **Known noise categories** include routine untested-custom-integration notices and 10-second slow updates for `climate.fjac_*` entities. Count-only categories cover specific Fujitsu/FGLair Ayla property-fetch timeouts, the three FGLair `FujitsuClimate` temperature deprecations, the Withings port 443 webhook warning, and same-identity replacements for six known SMA sensors.
+- **Ignored-event counts** track filtered WARNINGs and ERRORs per category across restarts. The next actionable digest includes a compact breakdown. Only the untested-integration and slow-update categories can trigger a standalone daily summary. The original messages remain visible in Home Assistant's System Logs.
 - **Delivery safeguards:** filtered-only summaries never reset the urgent error cooldown; failed email sends do not acknowledge the tracked counts.
 - **Email:** sends one grouped email at most every 60 minutes, suppressing repeats of already notified error signatures for 24 hours.
-- **Home Assistant:** uses two stable, updating persistent notification IDs: `log_error_digest_summary` for actionable digests and `log_error_digest_ignored_summary` for known-noise-only summaries. An ignored-only summary cannot replace a previous actionable notification.
+- **Home Assistant** uses the stable notification ID `log_error_digest_summary` for actionable digests and `log_error_digest_ignored_summary` for standalone daily summaries.
 - **Storage:** restart-persistent bounded history of up to 200 groups, saved locally in Home Assistant's `.storage`, with 30-day pruning. Ignored category counters are stored separately and do not consume the 200-group limit.
 - **Resilience:** retries after failed email delivery, with protection against self-notification loops.
 

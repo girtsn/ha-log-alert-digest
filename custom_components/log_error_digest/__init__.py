@@ -150,7 +150,7 @@ class LogErrorDigest:
                 # Capture both actionable and filtered counts; events arriving
                 # during the await are kept for the following digest.
                 batch = deepcopy(ready)
-                ignored_batch = deepcopy(self.state.pending_ignored())
+                ignored_batch = deepcopy(self.state.pending_ignored(include_count_only=bool(batch)))
                 title, message = summarize(batch, ignored_batch)
                 title = f"{self.prefix} {title}".strip()
                 # Keep actionable warnings visible when an ignored-only summary
