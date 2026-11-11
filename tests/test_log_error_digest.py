@@ -35,6 +35,13 @@ WITHINGS_WARNING = {
                 "https://www.home-assistant.io/integrations/withings/#webhook-requirements"],
     "exception": "",
 }
+ZEROCONF_PERMISSION_ERROR = "PermissionError: [Errno 1] Operation not permitted"
+ZEROCONF_WARNING = {
+    "level": "WARNING", "name": "zeroconf",
+    "source": "/usr/local/lib/python3.14/site-packages/zeroconf/_logger.py:84",
+    "message": ["Error with socket 15 (('::', 5353, 0, 0))): [Errno 1] Operation not permitted"],
+    "exception": f"Traceback (most recent call last):\n{ZEROCONF_PERMISSION_ERROR}",
+}
 INITIAL = timedelta(minutes=2)
 COOLDOWN = timedelta(minutes=60)
 REPEAT = timedelta(hours=24)
@@ -247,23 +254,26 @@ class DigestTests(unittest.TestCase):
 
     def test_upgrade_reclassifies_pending_count_only_examples(self):
         state = ErrorDigestState()
-        sma = sma_warning("Metering.GridMs.TotWhOut.Bat", "battery_discharge_total")
+        sma = sma_warning("DcMs.TotDcEnCntWh.2", "pv_total_power_b")
         sample_events = (
             ("fujitsu_ayla_timeout", "ERROR", "pyfujitsugeneral",
              "custom_components/fglair_heatpump_controller/climate.py:617",
-             FUJITSU_DATAPOINT_TIMEOUT),
+             FUJITSU_DATAPOINT_TIMEOUT, ""),
             ("fujitsu_temperature_deprecation", "WARNING",
              "custom_components.fglair_heatpump_controller.climate", "helpers/deprecation.py:706",
-             FUJITSU_TEMPERATURE_DEPRECATION.replace("current_temperature", "target_temperature")),
+             FUJITSU_TEMPERATURE_DEPRECATION.replace("current_temperature", "target_temperature"), ""),
             ("withings_webhook_port", "WARNING", WITHINGS_WARNING["name"],
-             WITHINGS_WARNING["source"], WITHINGS_WARNING["message"][0]),
-            ("sma_sensor_replacement", "WARNING", sma["name"], sma["source"], sma["message"][0][:320]),
+             WITHINGS_WARNING["source"], WITHINGS_WARNING["message"][0], ""),
+            ("sma_sensor_replacement", "WARNING", sma["name"], sma["source"], sma["message"][0][:320], ""),
+            ("zeroconf_mdns_permission", "WARNING", ZEROCONF_WARNING["name"],
+             ZEROCONF_WARNING["source"].replace(":84", " 84"),
+             ZEROCONF_WARNING["message"][0], ZEROCONF_PERMISSION_ERROR),
         )
-        for category, level, name, source, message in sample_events:
+        for category, level, name, source, message, exception in sample_events:
             # Mimic stored groups saved by the prior unfiltered version.
             state.groups[category] = {
                 "level": level, "logger": name, "source": source,
-                "message": message, "exception": "", "last": T0.isoformat(),
+                "message": message, "exception": exception, "last": T0.isoformat(),
                 "unreported": 2, "total": 3,
             }
         restored = ErrorDigestState(state.snapshot())
@@ -280,6 +290,7 @@ class DigestTests(unittest.TestCase):
             ("Metering.GridMs.TotWhIn.Bat", "battery_charge_total", "kWh", 1000),
             ("Metering.GridMs.TotWhOut.Bat", "battery_discharge_total", "kWh", 1000),
             ("DcMs.TotDcEnCntWh.1", "pv_total_power_a", "kWh", 1000),
+            ("DcMs.TotDcEnCntWh.2", "pv_total_power_b", "kWh", 1000),
             ("DcMs.TotDcEnCntWh.3", "pv_total_power_c", "kWh", 1000),
             ("Operation.BckStt", "backup_mode_status", None, 1),
             ("GridMs.A.phsA", "current_l1", "A", 1),
@@ -289,7 +300,7 @@ class DigestTests(unittest.TestCase):
         self.assertFalse(state.groups)
         self.assertFalse(state.ignored_due(T0 + timedelta(hours=48), COOLDOWN))
         self.assertEqual(state.ignored["withings_webhook_port"]["pending"], 1)
-        self.assertEqual(state.ignored["sma_sensor_replacement"]["pending"], 6)
+        self.assertEqual(state.ignored["sma_sensor_replacement"]["pending"], 7)
 
         # Older noise cannot advance the clock for a separate legacy summary.
         later = T0 + timedelta(hours=48)
@@ -306,7 +317,7 @@ class DigestTests(unittest.TestCase):
         batch = state.ready(later + INITIAL, INITIAL, COOLDOWN, REPEAT)
         _, summary = summarize(batch, state.pending_ignored())
         self.assertIn("Withings webhook port 443 warnings: 1 WARNING", summary)
-        self.assertIn("SMA known sensor replacement warnings: 6 WARNING", summary)
+        self.assertIn("SMA known sensor replacement warnings: 7 WARNING", summary)
         self.assertNotIn("Replacing sensor Sensor(", summary)
         self.assertNotIn("#webhook-requirements", summary)
 
@@ -321,10 +332,44 @@ class DigestTests(unittest.TestCase):
             {**sma, "message": [f"{old} with {replacement.replace('pv_total_power_a', 'pv_total_power_b')}"]},
             {**sma, "source": "custom_components/other/__init__.py:113"},
             {**sma, "exception": "ValueError: bad sensor mapping"},
-            sma_warning("DcMs.TotDcEnCntWh.2", "pv_total_power_b"),
+            sma_warning("DcMs.TotDcEnCntWh.4", "pv_total_power_d"),
         ):
             with self.subTest(event=event):
                 self.assertTrue(state.observe(event, T0))
+        self.assertFalse(state.ignored)
+
+    def test_zeroconf_ipv6_socket_permission_warning_is_counted(self):
+        state = ErrorDigestState()
+        self.assertFalse(state.observe(ZEROCONF_WARNING, T0))
+        self.assertFalse(state.observe({
+            **ZEROCONF_WARNING,
+            "source": ("/usr/lib/python3.15/site-packages/zeroconf/_logger.py", 91),
+            "message": [ZEROCONF_WARNING["message"][0].replace("socket 15", "socket 26")],
+        }, T0))
+        self.assertFalse(state.groups)
+        self.assertFalse(state.pending_ignored(include_count_only=False))
+        self.assertFalse(state.ignored_due(T0 + timedelta(hours=48), COOLDOWN))
+        self.assertEqual(state.ignored["zeroconf_mdns_permission"]["pending"], 2)
+
+        state.observe(error(), T0)
+        batch = state.ready(T0 + INITIAL, INITIAL, COOLDOWN, REPEAT)
+        _, summary = summarize(batch, state.pending_ignored())
+        self.assertIn("Zeroconf IPv6 mDNS socket permission warnings: 2 WARNING", summary)
+        self.assertNotIn("Error with socket", summary)
+
+    def test_other_zeroconf_socket_failures_are_actionable(self):
+        state = ErrorDigestState()
+        message = ZEROCONF_WARNING["message"][0]
+        for changes in (
+            {"level": "ERROR"},
+            {"name": "another_logger"},
+            {"source": "another_package/_logger.py:84"},
+            {"message": [message.replace("'::', 5353, 0, 0", "'0.0.0.0', 5353")]},
+            {"message": [message.replace("5353", "5354")]},
+            {"exception": "OSError: [Errno 101] Network is unreachable"},
+        ):
+            with self.subTest(changes=changes):
+                self.assertTrue(state.observe({**ZEROCONF_WARNING, **changes}, T0))
         self.assertFalse(state.ignored)
 
     def test_other_fujitsu_errors_and_unexpected_timeouts_remain_actionable(self):
