@@ -50,10 +50,16 @@ _SMA_REPLACEMENT_SENSORS = {
     ("Metering.GridMs.TotWhIn.Bat", "battery_charge_total"),
     ("Metering.GridMs.TotWhOut.Bat", "battery_discharge_total"),
     ("DcMs.TotDcEnCntWh.1", "pv_total_power_a"),
+    ("DcMs.TotDcEnCntWh.2", "pv_total_power_b"),
     ("DcMs.TotDcEnCntWh.3", "pv_total_power_c"),
     ("Operation.BckStt", "backup_mode_status"),
     ("GridMs.A.phsA", "current_l1"),
 }
+_ZEROCONF_LOG_SOURCE = re.compile(r"(?:^|/)zeroconf/_logger\.py(?:[: ]\s*\d+)?$")
+_ZEROCONF_MDNS_PERMISSION_WARNING = re.compile(
+    r"Error with socket \d+ \(\('::', 5353, 0, 0\)\)\): "
+    r"\[Errno 1\] Operation not permitted"
+)
 IGNORED_CATEGORIES = {
     "untested_custom_integration": ("WARNING", "Routine untested custom integration notices"),
     "fujitsu_ayla_timeout": ("ERROR", "Fujitsu/Ayla cloud properties fetch timeouts"),
@@ -61,12 +67,14 @@ IGNORED_CATEGORIES = {
     "fujitsu_temperature_deprecation": ("WARNING", "Fujitsu climate temperature deprecation notices"),
     "withings_webhook_port": ("WARNING", "Withings webhook port 443 warnings"),
     "sma_sensor_replacement": ("WARNING", "SMA known sensor replacement warnings"),
+    "zeroconf_mdns_permission": ("WARNING", "Zeroconf IPv6 mDNS socket permission warnings"),
 }
 _COUNT_ONLY_CATEGORIES = {
     "fujitsu_ayla_timeout",
     "fujitsu_temperature_deprecation",
     "withings_webhook_port",
     "sma_sensor_replacement",
+    "zeroconf_mdns_permission",
 }
 IGNORED_SUMMARY_INTERVAL = timedelta(hours=24)
 
@@ -101,6 +109,11 @@ def _ignored_category(level: str, logger: str, source: str,
         replacement = _SMA_SENSOR_REPLACEMENT.match(message)
         if replacement and replacement.groups() in _SMA_REPLACEMENT_SENSORS:
             return "sma_sensor_replacement"
+    if (level == "WARNING" and logger == "zeroconf"
+            and exception == "PermissionError: [Errno 1] Operation not permitted"
+            and _ZEROCONF_MDNS_PERMISSION_WARNING.fullmatch(message)
+            and _ZEROCONF_LOG_SOURCE.search(source)):
+        return "zeroconf_mdns_permission"
     return None
 
 
