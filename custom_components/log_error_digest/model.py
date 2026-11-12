@@ -17,13 +17,36 @@ _CUSTOM_INTEGRATION_NOTICE = re.compile(
 )
 
 
-# Match only known Ayla EU cloud property-fetch timeouts from Fujitsu FGLair.
-# Other endpoints, transport failures and real device errors remain actionable.
-_FUJITSU_AYLA_TIMEOUT = re.compile(
-    r"Timeout error fetching information from "
+# Match the specific FGLair Ayla EU requests seen failing transiently.
+# Do not filter other endpoints, authentication rejections or device failures.
+_FUJITSU_AYLA_PROPERTY_URL = (
     r"https://ads-field-eu\.aylanetworks\.com/apiv1/"
-    r"(?:dsns/[^/\s]+/properties\.json|properties/\d+/datapoints\.json)\s*-?\s*"
+    r"(?:dsns/[^/\s]+/properties\.json|properties/\d+/datapoints\.json)"
 )
+_FUJITSU_AYLA_SIGNIN_URL = (
+    r"https://user-field-eu\.aylanetworks\.com/users/sign_in\.json"
+)
+_FUJITSU_AYLA_TIMEOUT = re.compile(
+    r"Timeout error fetching information from (?:"
+    + _FUJITSU_AYLA_PROPERTY_URL + "|" + _FUJITSU_AYLA_SIGNIN_URL
+    + r")\s*-?\s*"
+)
+_FUJITSU_AYLA_PROPERTY_500 = re.compile(
+    r"Error fetching information from (?P<url>"
+    + _FUJITSU_AYLA_PROPERTY_URL
+    + r") - 500, message='Internal Server Error', url='(?P=url)'"
+)
+# A generic FGLairGeneralException is not independently safe to ignore.
+# Count it only when the known cloud failure preceded it within 30 seconds.
+_FUJITSU_FAILED_ENTITY_UPDATE = re.compile(
+    r"Update for climate\.fjac_[a-z0-9_]+ fails"
+)
+_FUJITSU_FAILED_ENTITY_EXCEPTION = (
+    "pyfujitsugeneral.exceptions.FGLairGeneralException: "
+    "FGLairBaseException has been raised"
+)
+_FUJITSU_CLOUD_CAUSE_WINDOW = timedelta(seconds=30)
+
 # Match the three temperature deprecations from the FGLair climate class.
 _FUJITSU_TEMPERATURE_DEPRECATION = re.compile(
     r"custom_components\.fglair_heatpump_controller\.climate::FujitsuClimate "
@@ -62,7 +85,8 @@ _ZEROCONF_MDNS_PERMISSION_WARNING = re.compile(
 )
 IGNORED_CATEGORIES = {
     "untested_custom_integration": ("WARNING", "Routine untested custom integration notices"),
-    "fujitsu_ayla_timeout": ("ERROR", "Fujitsu/Ayla cloud properties fetch timeouts"),
+    "fujitsu_ayla_timeout": ("ERROR", "Fujitsu/Ayla known cloud request failures"),
+    "fujitsu_ayla_climate_update": ("ERROR", "Fujitsu climate update failures following Ayla errors"),
     "fujitsu_slow_climate_update": ("WARNING", "Fujitsu climate updates taking over 10 seconds"),
     "fujitsu_temperature_deprecation": ("WARNING", "Fujitsu climate temperature deprecation notices"),
     "withings_webhook_port": ("WARNING", "Withings webhook port 443 warnings"),
@@ -71,6 +95,7 @@ IGNORED_CATEGORIES = {
 }
 _COUNT_ONLY_CATEGORIES = {
     "fujitsu_ayla_timeout",
+    "fujitsu_ayla_climate_update",
     "fujitsu_temperature_deprecation",
     "withings_webhook_port",
     "sma_sensor_replacement",
@@ -87,7 +112,9 @@ def _ignored_category(level: str, logger: str, source: str,
         return "untested_custom_integration"
     if (level == "ERROR" and logger == "pyfujitsugeneral"
             and source.startswith("custom_components/fglair_heatpump_controller/")
-            and not exception and _FUJITSU_AYLA_TIMEOUT.fullmatch(message)):
+            and not exception and (
+                _FUJITSU_AYLA_TIMEOUT.fullmatch(message)
+                or _FUJITSU_AYLA_PROPERTY_500.fullmatch(message))):
         return "fujitsu_ayla_timeout"
     if (level == "WARNING" and logger == "homeassistant.helpers.entity"
             and source.startswith(("helpers/entity.py", "homeassistant/helpers/entity.py"))
@@ -116,6 +143,18 @@ def _ignored_category(level: str, logger: str, source: str,
         return "zeroconf_mdns_permission"
     return None
 
+
+
+def _fujitsu_cloud_followup(level: str, logger: str, source: str,
+                            message: str, exception: str) -> bool:
+    """Recognize only the exact Home Assistant failure after an Ayla error."""
+    return (
+        level == "ERROR"
+        and logger == "homeassistant.helpers.entity"
+        and source.startswith(("helpers/entity.py", "homeassistant/helpers/entity.py"))
+        and bool(_FUJITSU_FAILED_ENTITY_UPDATE.fullmatch(message))
+        and exception == _FUJITSU_FAILED_ENTITY_EXCEPTION
+    )
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -169,6 +208,30 @@ class ErrorDigestState:
                 del self.groups[key]
                 self.dirty = True
                 self.revision += 1
+        # Once cloud errors have been migrated, their timestamps can explain
+        # pending Home Assistant entity-update errors from the same outage.
+        for key, group in list(self.groups.items()):
+            if not _fujitsu_cloud_followup(
+                group.get("level", ""), group.get("logger", ""),
+                group.get("source", ""), group.get("message", ""),
+                group.get("exception", ""),
+            ):
+                continue
+            if self._recent_fujitsu_ayla_failure(parse(group["last"])):
+                pending = group.get("unreported", 0)
+                if pending:
+                    self._track_ignored("fujitsu_ayla_climate_update", parse(group["last"]), pending)
+                del self.groups[key]
+                self.dirty = True
+                self.revision += 1
+
+    def _recent_fujitsu_ayla_failure(self, now: datetime) -> bool:
+        """Use the persisted category timestamp to correlate after restart."""
+        last = self.ignored.get("fujitsu_ayla_timeout", {}).get("last")
+        if not last:
+            return False
+        delta = now - parse(last)
+        return timedelta(0) <= delta <= _FUJITSU_CLOUD_CAUSE_WINDOW
 
     def snapshot(self) -> dict:
         return {
@@ -191,6 +254,10 @@ class ErrorDigestState:
         message = _short(event.get("message"), 320)
         exception = _last_exception_line(event.get("exception"))
         ignored_category = _ignored_category(level, logger, source, message, exception)
+        if (not ignored_category
+                and _fujitsu_cloud_followup(level, logger, source, message, exception)
+                and self._recent_fujitsu_ayla_failure(now)):
+            ignored_category = "fujitsu_ayla_climate_update"
         if ignored_category:
             self._track_ignored(ignored_category, now)
             return False
