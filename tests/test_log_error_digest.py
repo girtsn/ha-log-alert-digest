@@ -193,7 +193,7 @@ class DigestTests(unittest.TestCase):
         batch = state.ready(later + INITIAL, INITIAL, COOLDOWN, REPEAT)
         title, message = summarize(batch, state.pending_ignored())
         self.assertIn("1 ERROR", title)
-        self.assertIn("Fujitsu/Ayla cloud properties fetch timeouts: 7 ERROR", message)
+        self.assertIn("Fujitsu/Ayla known cloud request failures: 7 ERROR", message)
         self.assertNotIn("AC000W002919187", message)
 
     def test_fujitsu_datapoints_timeout_from_logs_is_ignored(self):
