@@ -23,12 +23,16 @@ _FUJITSU_AYLA_PROPERTY_URL = (
     r"https://ads-field-eu\.aylanetworks\.com/apiv1/"
     r"(?:dsns/[^/\s]+/properties\.json|properties/\d+/datapoints\.json)"
 )
+_FUJITSU_AYLA_DEVICES_URL = (
+    r"https://ads-field-eu\.aylanetworks\.com/apiv1/devices\.json"
+)
 _FUJITSU_AYLA_SIGNIN_URL = (
     r"https://user-field-eu\.aylanetworks\.com/users/sign_in\.json"
 )
 _FUJITSU_AYLA_TIMEOUT = re.compile(
     r"Timeout error fetching information from (?:"
-    + _FUJITSU_AYLA_PROPERTY_URL + "|" + _FUJITSU_AYLA_SIGNIN_URL
+    + _FUJITSU_AYLA_PROPERTY_URL + "|" + _FUJITSU_AYLA_DEVICES_URL
+    + "|" + _FUJITSU_AYLA_SIGNIN_URL
     + r")\s*-?\s*"
 )
 _FUJITSU_AYLA_PROPERTY_500 = re.compile(
