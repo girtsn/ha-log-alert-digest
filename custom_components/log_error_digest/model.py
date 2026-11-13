@@ -40,6 +40,14 @@ _FUJITSU_AYLA_PROPERTY_500 = re.compile(
     + _FUJITSU_AYLA_PROPERTY_URL
     + r") - 500, message='Internal Server Error', url='(?P=url)'"
 )
+# DNS failure at this one endpoint is different from an Ayla server timeout:
+# give it a daily known-noise summary so recurring resolver failures remain visible.
+_FUJITSU_AYLA_DNS_TIMEOUT = re.compile(
+    r"Error fetching information from "
+    + _FUJITSU_AYLA_DEVICES_URL
+    + r" - Cannot connect to host ads-field-eu\.aylanetworks\.com:443 "
+    + r"ssl:default \[Timeout while contacting DNS servers\]"
+)
 # A generic FGLairGeneralException is not independently safe to ignore.
 # Count it only when the known cloud failure preceded it within 30 seconds.
 _FUJITSU_FAILED_ENTITY_UPDATE = re.compile(
@@ -90,6 +98,7 @@ _ZEROCONF_MDNS_PERMISSION_WARNING = re.compile(
 IGNORED_CATEGORIES = {
     "untested_custom_integration": ("WARNING", "Routine untested custom integration notices"),
     "fujitsu_ayla_timeout": ("ERROR", "Fujitsu/Ayla known cloud request failures"),
+    "fujitsu_ayla_dns_timeout": ("ERROR", "Fujitsu/Ayla DNS resolution timeouts"),
     "fujitsu_ayla_climate_update": ("ERROR", "Fujitsu climate update failures following Ayla errors"),
     "fujitsu_slow_climate_update": ("WARNING", "Fujitsu climate updates taking over 10 seconds"),
     "fujitsu_temperature_deprecation": ("WARNING", "Fujitsu climate temperature deprecation notices"),
@@ -120,6 +129,10 @@ def _ignored_category(level: str, logger: str, source: str,
                 _FUJITSU_AYLA_TIMEOUT.fullmatch(message)
                 or _FUJITSU_AYLA_PROPERTY_500.fullmatch(message))):
         return "fujitsu_ayla_timeout"
+    if (level == "ERROR" and logger == "pyfujitsugeneral"
+            and source.startswith("custom_components/fglair_heatpump_controller/")
+            and not exception and _FUJITSU_AYLA_DNS_TIMEOUT.fullmatch(message)):
+        return "fujitsu_ayla_dns_timeout"
     if (level == "WARNING" and logger == "homeassistant.helpers.entity"
             and source.startswith(("helpers/entity.py", "homeassistant/helpers/entity.py"))
             and not exception and _FUJITSU_SLOW_ENTITY_UPDATE.fullmatch(message)):
@@ -230,12 +243,14 @@ class ErrorDigestState:
                 self.revision += 1
 
     def _recent_fujitsu_ayla_failure(self, now: datetime) -> bool:
-        """Use the persisted category timestamp to correlate after restart."""
-        last = self.ignored.get("fujitsu_ayla_timeout", {}).get("last")
-        if not last:
-            return False
-        delta = now - parse(last)
-        return timedelta(0) <= delta <= _FUJITSU_CLOUD_CAUSE_WINDOW
+        """Correlate climate failures with recent Ayla or DNS request errors."""
+        for category in ("fujitsu_ayla_timeout", "fujitsu_ayla_dns_timeout"):
+            last = self.ignored.get(category, {}).get("last")
+            if last:
+                delta = now - parse(last)
+                if timedelta(0) <= delta <= _FUJITSU_CLOUD_CAUSE_WINDOW:
+                    return True
+        return False
 
     def snapshot(self) -> dict:
         return {
