@@ -59,6 +59,17 @@ _FUJITSU_FAILED_ENTITY_EXCEPTION = (
 )
 _FUJITSU_CLOUD_CAUSE_WINDOW = timedelta(seconds=30)
 
+# These are *intermediate* retries, not exhausted attempts. Keep final failures,
+# other exceptions and unrelated modules actionable.
+_FUJITSU_RETRY_WARNING = re.compile(
+    r"API call failed \(attempt [12]/3\): "
+    r"FGLairBaseException has been raised\. "
+    r"Retrying in \d+(?:\.\d+)?s\.\.\."
+)
+_FUJITSU_CLIMATE_LOG_SOURCE = re.compile(
+    r"custom_components/fglair_heatpump_controller/climate\.py(?:[: ]\d+)?"
+)
+
 # Match the three temperature deprecations from the FGLair climate class.
 _FUJITSU_TEMPERATURE_DEPRECATION = re.compile(
     r"custom_components\.fglair_heatpump_controller\.climate::FujitsuClimate "
@@ -101,6 +112,7 @@ IGNORED_CATEGORIES = {
     "fujitsu_ayla_dns_timeout": ("ERROR", "Fujitsu/Ayla DNS resolution timeouts"),
     "fujitsu_ayla_climate_update": ("ERROR", "Fujitsu climate update failures following Ayla errors"),
     "fujitsu_slow_climate_update": ("WARNING", "Fujitsu climate updates taking over 10 seconds"),
+    "fujitsu_api_retry": ("WARNING", "Fujitsu FGLair automatic API retry warnings"),
     "fujitsu_temperature_deprecation": ("WARNING", "Fujitsu climate temperature deprecation notices"),
     "withings_webhook_port": ("WARNING", "Withings webhook port 443 warnings"),
     "sma_sensor_replacement": ("WARNING", "SMA known sensor replacement warnings"),
@@ -109,6 +121,7 @@ IGNORED_CATEGORIES = {
 _COUNT_ONLY_CATEGORIES = {
     "fujitsu_ayla_timeout",
     "fujitsu_ayla_climate_update",
+    "fujitsu_api_retry",
     "fujitsu_temperature_deprecation",
     "withings_webhook_port",
     "sma_sensor_replacement",
@@ -133,6 +146,11 @@ def _ignored_category(level: str, logger: str, source: str,
             and source.startswith("custom_components/fglair_heatpump_controller/")
             and not exception and _FUJITSU_AYLA_DNS_TIMEOUT.fullmatch(message)):
         return "fujitsu_ayla_dns_timeout"
+    if (level == "WARNING"
+            and logger == "custom_components.fglair_heatpump_controller.climate"
+            and _FUJITSU_CLIMATE_LOG_SOURCE.fullmatch(source)
+            and not exception and _FUJITSU_RETRY_WARNING.fullmatch(message)):
+        return "fujitsu_api_retry"
     if (level == "WARNING" and logger == "homeassistant.helpers.entity"
             and source.startswith(("helpers/entity.py", "homeassistant/helpers/entity.py"))
             and not exception and _FUJITSU_SLOW_ENTITY_UPDATE.fullmatch(message)):
