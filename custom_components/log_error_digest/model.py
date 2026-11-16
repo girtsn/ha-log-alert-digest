@@ -68,10 +68,10 @@ _FUJITSU_COORDINATOR_WARNING = (
 )
 _FUJITSU_COORDINATOR_ERROR = "Error fetching fglair_heatpump_controller data:"
 _FUJITSU_COORDINATOR_WARNING_SOURCE = re.compile(
-    r"custom_components/fglair_heatpump_controller/__init__\\.py(?:[: ]\\d+)?"
+    r"custom_components/fglair_heatpump_controller/__init__\.py(?:[: ]\d+)?"
 )
 _FUJITSU_COORDINATOR_ERROR_SOURCE = re.compile(
-    r"(?:homeassistant/)?helpers/update_coordinator\\.py(?:[: ]\\d+)?"
+    r"(?:homeassistant/)?helpers/update_coordinator\.py(?:[: ]\d+)?"
 )
 
 # These are *intermediate* retries, not exhausted attempts. Keep final failures,
