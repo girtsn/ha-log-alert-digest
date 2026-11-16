@@ -59,6 +59,21 @@ _FUJITSU_FAILED_ENTITY_EXCEPTION = (
 )
 _FUJITSU_CLOUD_CAUSE_WINDOW = timedelta(seconds=30)
 
+# The same unsuccessful coordinator refresh is logged twice: first by FGLair
+# and then by Home Assistant. Generic FGLairBaseException alone is NOT proof
+# of a network problem, so only the duplicate warning is unconditionally
+# removed when the matching coordinator ERROR is also present.
+_FUJITSU_COORDINATOR_WARNING = (
+    "Failed to update coordinator data: FGLairBaseException has been raised"
+)
+_FUJITSU_COORDINATOR_ERROR = "Error fetching fglair_heatpump_controller data:"
+_FUJITSU_COORDINATOR_WARNING_SOURCE = re.compile(
+    r"custom_components/fglair_heatpump_controller/__init__\\.py(?:[: ]\\d+)?"
+)
+_FUJITSU_COORDINATOR_ERROR_SOURCE = re.compile(
+    r"(?:homeassistant/)?helpers/update_coordinator\\.py(?:[: ]\\d+)?"
+)
+
 # These are *intermediate* retries, not exhausted attempts. Keep final failures,
 # other exceptions and unrelated modules actionable.
 _FUJITSU_RETRY_WARNING = re.compile(
@@ -111,6 +126,9 @@ IGNORED_CATEGORIES = {
     "fujitsu_ayla_timeout": ("ERROR", "Fujitsu/Ayla known cloud request failures"),
     "fujitsu_ayla_dns_timeout": ("ERROR", "Fujitsu/Ayla DNS resolution timeouts"),
     "fujitsu_ayla_climate_update": ("ERROR", "Fujitsu climate update failures following Ayla errors"),
+    "fujitsu_ayla_coordinator_error": ("ERROR", "Fujitsu coordinator errors following Ayla failures"),
+    "fujitsu_ayla_coordinator_warning": ("WARNING", "Fujitsu coordinator warnings following Ayla failures"),
+    "fujitsu_coordinator_duplicate_warning": ("WARNING", "Duplicate Fujitsu coordinator warnings alongside errors"),
     "fujitsu_slow_climate_update": ("WARNING", "Fujitsu climate updates taking over 10 seconds"),
     "fujitsu_api_retry": ("WARNING", "Fujitsu FGLair automatic API retry warnings"),
     "fujitsu_temperature_deprecation": ("WARNING", "Fujitsu climate temperature deprecation notices"),
@@ -121,6 +139,9 @@ IGNORED_CATEGORIES = {
 _COUNT_ONLY_CATEGORIES = {
     "fujitsu_ayla_timeout",
     "fujitsu_ayla_climate_update",
+    "fujitsu_ayla_coordinator_error",
+    "fujitsu_ayla_coordinator_warning",
+    "fujitsu_coordinator_duplicate_warning",
     "fujitsu_api_retry",
     "fujitsu_temperature_deprecation",
     "withings_webhook_port",
@@ -191,6 +212,20 @@ def _fujitsu_cloud_followup(level: str, logger: str, source: str,
         and exception == _FUJITSU_FAILED_ENTITY_EXCEPTION
     )
 
+def _fujitsu_coordinator_kind(level: str, logger: str, source: str,
+                              message: str, exception: str) -> str | None:
+    """Match exactly the paired FGLair/HA coordinator refresh messages."""
+    if logger != "custom_components.fglair_heatpump_controller" or exception:
+        return None
+    if (level == "WARNING" and message == _FUJITSU_COORDINATOR_WARNING
+            and _FUJITSU_COORDINATOR_WARNING_SOURCE.fullmatch(source)):
+        return "warning"
+    if (level == "ERROR" and message == _FUJITSU_COORDINATOR_ERROR
+            and _FUJITSU_COORDINATOR_ERROR_SOURCE.fullmatch(source)):
+        return "error"
+    return None
+
+
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -260,6 +295,32 @@ class ErrorDigestState:
                 self.dirty = True
                 self.revision += 1
 
+        # Reclassify saved pending coordinator messages on upgrade. A known
+        # immediately preceding Ayla failure explains both. Otherwise retain
+        # the actionable HA ERROR but eliminate its duplicate FGLair WARNING.
+        for key, group in list(self.groups.items()):
+            kind = _fujitsu_coordinator_kind(
+                group.get("level", ""), group.get("logger", ""),
+                group.get("source", ""), group.get("message", ""),
+                group.get("exception", ""),
+            )
+            if kind and self._recent_fujitsu_ayla_failure(parse(group["last"])):
+                pending = group.get("unreported", 0)
+                if pending:
+                    self._track_ignored(
+                        f"fujitsu_ayla_coordinator_{kind}", parse(group["last"]), pending
+                    )
+                del self.groups[key]
+                self.dirty = True
+                self.revision += 1
+        for group in list(self.groups.values()):
+            if _fujitsu_coordinator_kind(
+                group.get("level", ""), group.get("logger", ""),
+                group.get("source", ""), group.get("message", ""),
+                group.get("exception", ""),
+            ) == "error":
+                self._retire_recent_coordinator_warning(parse(group["last"]))
+
     def _recent_fujitsu_ayla_failure(self, now: datetime) -> bool:
         """Correlate climate failures with recent Ayla or DNS request errors."""
         for category in ("fujitsu_ayla_timeout", "fujitsu_ayla_dns_timeout"):
@@ -269,6 +330,41 @@ class ErrorDigestState:
                 if timedelta(0) <= delta <= _FUJITSU_CLOUD_CAUSE_WINDOW:
                     return True
         return False
+
+    def _recent_coordinator_error(self, now: datetime) -> bool:
+        return any(
+            _fujitsu_coordinator_kind(
+                group.get("level", ""), group.get("logger", ""),
+                group.get("source", ""), group.get("message", ""),
+                group.get("exception", ""),
+            ) == "error"
+            and timedelta(0) <= now - parse(group["last"]) <= _FUJITSU_CLOUD_CAUSE_WINDOW
+            for group in self.groups.values()
+        )
+
+    def _retire_recent_coordinator_warning(self, now: datetime,
+                                           *, cloud_related: bool = False) -> None:
+        """Remove one pending duplicate warning, not older unrelated incidents."""
+        for key, group in list(self.groups.items()):
+            if (_fujitsu_coordinator_kind(
+                    group.get("level", ""), group.get("logger", ""),
+                    group.get("source", ""), group.get("message", ""),
+                    group.get("exception", ""),
+                ) != "warning" or group.get("unreported", 0) <= 0):
+                continue
+            delta = now - parse(group["last"])
+            if not timedelta(0) <= delta <= _FUJITSU_CLOUD_CAUSE_WINDOW:
+                continue
+            group["unreported"] -= 1
+            if not group["unreported"]:
+                group["pending_since"] = None
+                if group["total"] == 1:
+                    del self.groups[key]
+            self._track_ignored(
+                "fujitsu_ayla_coordinator_warning" if cloud_related
+                else "fujitsu_coordinator_duplicate_warning", now,
+            )
+            break
 
     def snapshot(self) -> dict:
         return {
@@ -291,6 +387,18 @@ class ErrorDigestState:
         message = _short(event.get("message"), 320)
         exception = _last_exception_line(event.get("exception"))
         ignored_category = _ignored_category(level, logger, source, message, exception)
+        coordinator_kind = _fujitsu_coordinator_kind(
+            level, logger, source, message, exception
+        )
+        cloud_related = bool(coordinator_kind and self._recent_fujitsu_ayla_failure(now))
+        if coordinator_kind == "error":
+            # A single failed update should not create two actionable alerts.
+            # A standalone/unexplained coordinator ERROR remains actionable.
+            self._retire_recent_coordinator_warning(now, cloud_related=cloud_related)
+        if cloud_related:
+            ignored_category = f"fujitsu_ayla_coordinator_{coordinator_kind}"
+        elif coordinator_kind == "warning" and self._recent_coordinator_error(now):
+            ignored_category = "fujitsu_coordinator_duplicate_warning"
         if (not ignored_category
                 and _fujitsu_cloud_followup(level, logger, source, message, exception)
                 and self._recent_fujitsu_ayla_failure(now)):
